@@ -6,864 +6,144 @@
 <title>GEX Monitor — 期权Gamma暴露监控</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-annotation/3.0.1/chartjs-plugin-annotation.min.js"></script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
-
 <style>
-/* ═══════════════════════════════════════════════════════════
-   CSS 变量 & 基础
-═══════════════════════════════════════════════════════════ */
 :root {
-  --bg-0: #080b0f;
-  --bg-1: #0d1117;
-  --bg-2: #131922;
-  --bg-3: #1a2332;
-  --border: #1e2d42;
-  --border-bright: #2a3f5a;
-
-  --green: #00d084;
-  --green-dim: #00d08440;
-  --green-glow: #00d08420;
-  --red: #ff4757;
-  --red-dim: #ff475740;
-  --red-glow: #ff475720;
-  --yellow: #ffd32a;
-  --yellow-dim: #ffd32a40;
-  --blue: #1e90ff;
-  --blue-dim: #1e90ff30;
-  --purple: #a55eea;
-  --cyan: #00d2d3;
-
-  --text-primary: #e8edf5;
-  --text-secondary: #8899aa;
-  --text-dim: #4a5a6a;
-
-  --font-mono: 'JetBrains Mono', monospace;
-  --font-display: 'Syne', sans-serif;
-
-  --radius: 6px;
-  --radius-lg: 12px;
-  --transition: 0.2s ease;
-}
-
-* { margin: 0; padding: 0; box-sizing: border-box; }
-
-html { scroll-behavior: smooth; }
-
-body {
-  background: var(--bg-0);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 1.5;
-  min-height: 100vh;
-  overflow-x: hidden;
-}
-
-/* 噪点背景纹理 */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-  pointer-events: none;
-  z-index: 0;
-  opacity: 0.5;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   Header
-═══════════════════════════════════════════════════════════ */
-header {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  background: var(--bg-1);
-  border-bottom: 1px solid var(--border);
-  padding: 0 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 56px;
-  backdrop-filter: blur(12px);
-}
-
-.logo {
-  font-family: var(--font-display);
-  font-size: 18px;
-  font-weight: 800;
-  letter-spacing: -0.5px;
-  color: var(--text-primary);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.logo-dot {
-  width: 8px; height: 8px;
-  background: var(--green);
-  border-radius: 50%;
-  box-shadow: 0 0 8px var(--green);
-  animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.6; transform: scale(0.85); }
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.market-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-}
-
-.status-dot {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--text-dim);
-}
-
-.status-dot.active { background: var(--green); box-shadow: 0 0 6px var(--green); }
-.status-dot.closed { background: var(--red); }
-
-#global-time {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   Tab 导航
-═══════════════════════════════════════════════════════════ */
-.tabs {
-  display: flex;
-  gap: 2px;
-  padding: 12px 24px 0;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-1);
-}
-
-.tab-btn {
-  background: none;
-  border: none;
-  padding: 10px 20px;
-  font-family: var(--font-display);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-dim);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  transition: var(--transition);
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-}
-
-.tab-btn:hover { color: var(--text-secondary); }
-.tab-btn.active { color: var(--green); border-bottom-color: var(--green); }
-
-.tab-panel { display: none; padding: 24px; }
-.tab-panel.active { display: block; }
-
-/* ═══════════════════════════════════════════════════════════
-   卡片组件
-═══════════════════════════════════════════════════════════ */
-.card {
-  background: var(--bg-1);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  transition: border-color var(--transition);
-}
-
-.card:hover { border-color: var(--border-bright); }
-
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-2);
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.card-title {
-  font-family: var(--font-display);
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-primary);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  letter-spacing: 0.3px;
-}
-
-.badge {
-  font-size: 10px;
-  padding: 2px 8px;
-  border-radius: 20px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-  letter-spacing: 0.5px;
-}
-
-.badge-green { background: var(--green-dim); color: var(--green); }
-.badge-red { background: var(--red-dim); color: var(--red); }
-.badge-yellow { background: var(--yellow-dim); color: var(--yellow); }
-.badge-blue { background: var(--blue-dim); color: var(--blue); }
-
-/* ═══════════════════════════════════════════════════════════
-   第一部分 GEX 观察布局
-═══════════════════════════════════════════════════════════ */
-.gex-section {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.symbol-row {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-/* 输入区域 */
-.symbol-input-bar {
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  padding: 14px 20px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.symbol-num {
-  font-family: var(--font-display);
-  font-size: 11px;
-  font-weight: 800;
-  color: var(--text-dim);
-  width: 20px;
-  text-align: center;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-}
-
-.sym-input {
-  background: var(--bg-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 6px 12px;
-  font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-primary);
-  width: 100px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  transition: var(--transition);
-  outline: none;
-}
-
-.sym-input:focus {
-  border-color: var(--green);
-  box-shadow: 0 0 0 2px var(--green-glow);
-}
-
-.load-btn {
-  background: var(--green);
-  color: #000;
-  border: none;
-  border-radius: var(--radius);
-  padding: 6px 16px;
-  font-family: var(--font-display);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  transition: var(--transition);
-}
-
-.load-btn:hover { background: #00f0a0; transform: translateY(-1px); }
-.load-btn:active { transform: translateY(0); }
-
-.load-btn:disabled {
-  background: var(--bg-3);
-  color: var(--text-dim);
-  cursor: not-allowed;
-  transform: none;
-}
-
-/* 指标栏 */
-.metrics-bar {
-  display: flex;
-  gap: 0;
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.metric-item {
-  flex: 1;
-  min-width: 100px;
-  padding: 10px 16px;
-  border-right: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-1);
-}
-
-.metric-item:last-child { border-right: none; }
-
-.metric-label {
-  font-size: 10px;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  margin-bottom: 4px;
-}
-
-.metric-value {
-  font-size: 15px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-primary);
-}
-
-.metric-value.green { color: var(--green); }
-.metric-value.red { color: var(--red); }
-.metric-value.yellow { color: var(--yellow); }
-.metric-value.blue { color: var(--blue); }
-
-/* 到期日选择器 */
-.expiry-section {
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-}
-
-.expiry-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 20px;
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-  user-select: none;
-  transition: background var(--transition);
-}
-
-.expiry-toggle:hover { background: var(--bg-3); }
-
-.expiry-toggle-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--font-display);
-}
-
-.selected-summary {
-  font-size: 11px;
-  color: var(--green);
-  font-family: var(--font-mono);
-}
-
-.chevron {
-  font-size: 10px;
-  color: var(--text-dim);
-  transition: transform var(--transition);
-}
-
-.chevron.open { transform: rotate(180deg); }
-
-.expiry-content {
-  display: none;
-  padding: 14px 20px;
-  background: var(--bg-1);
-  border-bottom: 1px solid var(--border);
-}
-
-.expiry-content.open { display: block; }
-
-.expiry-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.expiry-chip {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  border-radius: 4px;
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: var(--transition);
-  user-select: none;
-}
-
-.expiry-chip:hover { border-color: var(--border-bright); color: var(--text-primary); }
-
-.expiry-chip.selected {
-  background: var(--green-dim);
-  border-color: var(--green);
-  color: var(--green);
-}
-
-.expiry-chip input[type="checkbox"] {
-  width: 12px; height: 12px;
-  accent-color: var(--green);
-}
-
-.expiry-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.expiry-action-btn {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 4px 10px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-family: var(--font-mono);
-  transition: var(--transition);
-}
-
-.expiry-action-btn:hover {
-  border-color: var(--green);
-  color: var(--green);
-}
-
-/* 图表区域 */
-.chart-area {
-  border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  background: var(--bg-1);
-  padding: 16px;
-  position: relative;
-}
-
-.chart-wrap {
-  position: relative;
-  width: 100%;
-}
-
-.chart-loading {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-1);
-  z-index: 10;
-  gap: 12px;
-}
-
-.chart-loading.hidden { display: none; }
-
-.spinner {
-  width: 28px; height: 28px;
-  border: 2px solid var(--border);
-  border-top-color: var(--green);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.loading-text {
-  font-size: 12px;
-  color: var(--text-dim);
-}
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 300px;
-  gap: 12px;
-  color: var(--text-dim);
-}
-
-.empty-icon {
-  font-size: 32px;
-  opacity: 0.4;
-}
-
-.empty-text {
-  font-size: 13px;
-  text-align: center;
-}
-
-/* 图表缩放控制 */
-.chart-controls {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-bottom: 10px;
-  flex-wrap: wrap;
-}
-
-.range-label {
-  font-size: 11px;
-  color: var(--text-dim);
-}
-
-.range-input {
-  width: 80px;
-  height: 4px;
-  accent-color: var(--green);
-  cursor: pointer;
-}
-
-.zoom-btn {
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 3px 10px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-family: var(--font-mono);
-  transition: var(--transition);
-}
-
-.zoom-btn:hover { border-color: var(--green); color: var(--green); }
-.zoom-btn.active { background: var(--green-dim); border-color: var(--green); color: var(--green); }
-
-/* 更新时间 */
-.update-time {
-  font-size: 10px;
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-  margin-left: auto;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   第二部分 末日观察
-═══════════════════════════════════════════════════════════ */
-.doomsday-section {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.doom-input-bar {
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 14px 20px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.doom-label {
-  font-family: var(--font-display);
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--red);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-.doom-unit {
-  background: var(--bg-1);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-
-.doom-unit-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 20px;
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
-}
-
-.doom-unit-title {
-  font-family: var(--font-display);
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-primary);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.unit-num {
-  width: 22px; height: 22px;
-  background: var(--red-dim);
-  color: var(--red);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.doom-chart-area {
-  padding: 16px;
-}
-
-/* Vol/OI 热力图行 */
-.voi-bar-row {
-  display: flex;
-  align-items: stretch;
-  gap: 0;
-  height: 40px;
-  overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
-}
-
-.voi-cell {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-end;
-  position: relative;
-  min-width: 50px;
-  gap: 2px;
-}
-
-.voi-bar {
-  width: 60%;
-  border-radius: 2px 2px 0 0;
-  transition: height 0.3s ease;
-}
-
-.voi-value {
-  font-size: 9px;
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
-}
-
-/* 单元③ IV曲线 */
-.iv-strike-selector {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-2);
-}
-
-.iv-strike-tag {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--text-secondary);
-  background: var(--bg-1);
-  cursor: pointer;
-  transition: var(--transition);
-}
-
-.iv-strike-tag.selected-call { background: var(--green-dim); border-color: var(--green); color: var(--green); }
-.iv-strike-tag.selected-put { background: var(--red-dim); border-color: var(--red); color: var(--red); }
-
-/* Gamma Squeeze 判断面板 */
-.squeeze-panel {
-  margin: 12px 16px;
-  padding: 12px 16px;
-  background: var(--bg-2);
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-}
-
-.squeeze-title {
-  font-family: var(--font-display);
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  margin-bottom: 8px;
-}
-
-.squeeze-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.squeeze-item {
-  padding: 8px 12px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--bg-1);
-}
-
-.squeeze-direction {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  margin-bottom: 4px;
-  font-family: var(--font-display);
-}
-
-.squeeze-direction.up { color: var(--green); }
-.squeeze-direction.down { color: var(--red); }
-
-.squeeze-signal {
-  font-size: 12px;
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.squeeze-detail {
-  font-size: 10px;
-  color: var(--text-dim);
-  margin-top: 2px;
-  line-height: 1.4;
-}
-
-/* IV 自定义输入 */
-.iv-custom-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 20px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-2);
-}
-
-.iv-custom-label {
-  font-size: 11px;
-  color: var(--text-dim);
-  white-space: nowrap;
-}
-
-.iv-strike-input {
-  background: var(--bg-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 4px 10px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-primary);
-  width: 80px;
-  outline: none;
-}
-
-.iv-strike-input:focus { border-color: var(--purple); }
-
-.iv-add-btn {
-  background: var(--purple);
-  color: #fff;
-  border: none;
-  border-radius: var(--radius);
-  padding: 4px 12px;
-  font-size: 11px;
-  font-family: var(--font-display);
-  font-weight: 700;
-  cursor: pointer;
-  letter-spacing: 0.5px;
-  transition: var(--transition);
-}
-
-.iv-add-btn:hover { background: #b57bf5; }
-
-/* ═══════════════════════════════════════════════════════════
-   响应式
-═══════════════════════════════════════════════════════════ */
-@media (max-width: 768px) {
-  .tab-panel { padding: 16px; }
-  .squeeze-grid { grid-template-columns: 1fr; }
-  .metrics-bar { flex-wrap: wrap; }
-}
-
-/* ═══════════════════════════════════════════════════════════
-   工具提示
-═══════════════════════════════════════════════════════════ */
-.tooltip-container { position: relative; }
-
-.tooltip-content {
-  display: none;
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--bg-3);
-  border: 1px solid var(--border-bright);
-  border-radius: var(--radius);
-  padding: 8px 12px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  z-index: 200;
-  pointer-events: none;
-}
-
-.tooltip-container:hover .tooltip-content { display: block; }
-
-/* ═══════════════════════════════════════════════════════════
-   动画
-═══════════════════════════════════════════════════════════ */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.fade-in { animation: fadeIn 0.3s ease forwards; }
-
-/* 滚动条美化 */
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-bright); }
+  --bg-0:#080b0f;--bg-1:#0d1117;--bg-2:#131922;--bg-3:#1a2332;
+  --border:#1e2d42;--border-bright:#2a3f5a;
+  --green:#00d084;--green-dim:#00d08440;--green-glow:#00d08420;
+  --red:#ff4757;--red-dim:#ff475740;
+  --yellow:#ffd32a;--yellow-dim:#ffd32a40;
+  --blue:#1e90ff;--blue-dim:#1e90ff30;
+  --purple:#a55eea;--cyan:#00d2d3;
+  --text-primary:#e8edf5;--text-secondary:#8899aa;--text-dim:#4a5a6a;
+  --font-mono:'JetBrains Mono',monospace;--font-display:'Syne',sans-serif;
+  --radius:6px;--radius-lg:12px;--t:0.2s ease;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg-0);color:var(--text-primary);font-family:var(--font-mono);font-size:13px;line-height:1.5;min-height:100vh;overflow-x:hidden;}
+
+/* Header */
+header{position:sticky;top:0;z-index:100;background:var(--bg-1);border-bottom:1px solid var(--border);padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:56px;}
+.logo{font-family:var(--font-display);font-size:18px;font-weight:800;display:flex;align-items:center;gap:10px;}
+.logo-dot{width:8px;height:8px;background:var(--green);border-radius:50%;box-shadow:0 0 8px var(--green);animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.6;transform:scale(.85);}}
+.header-right{display:flex;align-items:center;gap:16px;}
+.market-status{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-secondary);}
+.status-dot{width:6px;height:6px;border-radius:50%;background:var(--text-dim);}
+.status-dot.active{background:var(--green);box-shadow:0 0 6px var(--green);}
+.status-dot.closed{background:var(--red);}
+#global-time{font-size:11px;color:var(--text-secondary);font-variant-numeric:tabular-nums;}
+
+/* Tabs */
+.tabs{display:flex;gap:2px;padding:12px 24px 0;border-bottom:1px solid var(--border);background:var(--bg-1);}
+.tab-btn{background:none;border:none;padding:10px 20px;font-family:var(--font-display);font-size:13px;font-weight:600;color:var(--text-dim);cursor:pointer;border-bottom:2px solid transparent;transition:var(--t);text-transform:uppercase;letter-spacing:.5px;}
+.tab-btn:hover{color:var(--text-secondary);}
+.tab-btn.active{color:var(--green);border-bottom-color:var(--green);}
+.tab-panel{display:none;padding:24px;}
+.tab-panel.active{display:block;}
+
+/* Cards / Rows */
+.gex-section,.doomsday-section{display:flex;flex-direction:column;gap:20px;}
+.symbol-row{display:flex;flex-direction:column;}
+
+/* Input bar */
+.symbol-input-bar{background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-lg) var(--radius-lg) 0 0;padding:12px 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.symbol-num{font-family:var(--font-display);font-size:11px;font-weight:800;color:var(--text-dim);width:20px;text-align:center;text-transform:uppercase;}
+.sym-input{background:var(--bg-3);border:1px solid var(--border);border-radius:var(--radius);padding:6px 12px;font-family:var(--font-mono);font-size:14px;font-weight:700;color:var(--text-primary);width:100px;text-transform:uppercase;letter-spacing:1px;outline:none;transition:var(--t);}
+.sym-input:focus{border-color:var(--green);box-shadow:0 0 0 2px var(--green-glow);}
+.load-btn{background:var(--green);color:#000;border:none;border-radius:var(--radius);padding:6px 16px;font-family:var(--font-display);font-size:12px;font-weight:700;cursor:pointer;text-transform:uppercase;transition:var(--t);}
+.load-btn:hover{background:#00f0a0;transform:translateY(-1px);}
+.load-btn:disabled{background:var(--bg-3);color:var(--text-dim);cursor:not-allowed;transform:none;}
+.update-time{font-size:10px;color:var(--text-dim);margin-left:auto;}
+
+/* Metrics bar */
+.metrics-bar{display:flex;border-left:1px solid var(--border);border-right:1px solid var(--border);overflow-x:auto;scrollbar-width:none;}
+.metric-item{flex:1;min-width:90px;padding:10px 14px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);background:var(--bg-1);}
+.metric-item:last-child{border-right:none;}
+.metric-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px;}
+.metric-value{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;}
+.metric-value.green{color:var(--green);}
+.metric-value.red{color:var(--red);}
+.metric-value.yellow{color:var(--yellow);}
+.metric-value.blue{color:var(--blue);}
+
+/* Expiry */
+.expiry-section{border-left:1px solid var(--border);border-right:1px solid var(--border);}
+.expiry-toggle{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:var(--bg-2);border-bottom:1px solid var(--border);cursor:pointer;user-select:none;}
+.expiry-toggle:hover{background:var(--bg-3);}
+.expiry-toggle-label{font-size:12px;font-weight:600;color:var(--text-secondary);display:flex;align-items:center;gap:8px;font-family:var(--font-display);}
+.selected-summary{font-size:11px;color:var(--green);}
+.chevron{font-size:10px;color:var(--text-dim);transition:transform var(--t);}
+.chevron.open{transform:rotate(180deg);}
+.expiry-content{display:none;padding:14px 20px;background:var(--bg-1);border-bottom:1px solid var(--border);}
+.expiry-content.open{display:block;}
+.expiry-grid{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
+.expiry-chip{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:4px;background:var(--bg-2);border:1px solid var(--border);font-size:11px;cursor:pointer;transition:var(--t);user-select:none;color:var(--text-secondary);}
+.expiry-chip:hover{border-color:var(--border-bright);color:var(--text-primary);}
+.expiry-chip.selected{background:var(--green-dim);border-color:var(--green);color:var(--green);}
+.expiry-chip input[type=checkbox]{width:12px;height:12px;accent-color:var(--green);}
+.expiry-actions{display:flex;gap:8px;}
+.expiry-action-btn{background:none;border:1px solid var(--border);border-radius:var(--radius);padding:4px 10px;font-size:11px;color:var(--text-secondary);cursor:pointer;font-family:var(--font-mono);transition:var(--t);}
+.expiry-action-btn:hover{border-color:var(--green);color:var(--green);}
+
+/* Chart area */
+.chart-area{border:1px solid var(--border);border-top:none;border-radius:0 0 var(--radius-lg) var(--radius-lg);background:var(--bg-1);padding:16px;}
+.chart-wrap{position:relative;width:100%;}
+.chart-loading{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg-1);z-index:10;gap:12px;}
+.chart-loading.hidden{display:none;}
+.spinner{width:28px;height:28px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.loading-text{font-size:12px;color:var(--text-dim);text-align:center;padding:0 20px;}
+.chart-controls{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-bottom:10px;}
+.range-label{font-size:11px;color:var(--text-dim);}
+.zoom-btn{background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius);padding:3px 10px;font-size:11px;color:var(--text-secondary);cursor:pointer;font-family:var(--font-mono);transition:var(--t);}
+.zoom-btn:hover{border-color:var(--green);color:var(--green);}
+.zoom-btn.active{background:var(--green-dim);border-color:var(--green);color:var(--green);}
+
+/* Doomsday */
+.doom-input-bar{background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.doom-label{font-family:var(--font-display);font-size:12px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:1px;}
+.doom-unit{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;}
+.doom-unit-header{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:var(--bg-2);border-bottom:1px solid var(--border);}
+.doom-unit-title{font-family:var(--font-display);font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;}
+.unit-num{width:22px;height:22px;background:var(--red-dim);color:var(--red);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;}
+.doom-chart-area{padding:16px;}
+
+/* IV */
+.iv-strike-selector{display:flex;flex-wrap:wrap;gap:6px;padding:12px 20px;border-bottom:1px solid var(--border);background:var(--bg-2);}
+.iv-strike-tag{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:4px;border:1px solid var(--border);font-size:11px;color:var(--text-secondary);background:var(--bg-1);cursor:pointer;transition:var(--t);}
+.iv-strike-tag.sel-call{background:var(--green-dim);border-color:var(--green);color:var(--green);}
+.iv-strike-tag.sel-put{background:var(--red-dim);border-color:var(--red);color:var(--red);}
+.iv-custom-input{display:flex;align-items:center;gap:8px;padding:8px 20px;border-top:1px solid var(--border);background:var(--bg-2);}
+.iv-custom-label{font-size:11px;color:var(--text-dim);white-space:nowrap;}
+.iv-strike-input{background:var(--bg-3);border:1px solid var(--border);border-radius:var(--radius);padding:4px 10px;font-family:var(--font-mono);font-size:12px;color:var(--text-primary);width:80px;outline:none;}
+.iv-strike-input:focus{border-color:var(--purple);}
+.iv-add-btn{background:var(--purple);color:#fff;border:none;border-radius:var(--radius);padding:4px 12px;font-size:11px;font-family:var(--font-display);font-weight:700;cursor:pointer;transition:var(--t);}
+.iv-add-btn:hover{background:#b57bf5;}
+
+/* Squeeze */
+.squeeze-panel{margin:12px 16px;padding:12px 16px;background:var(--bg-2);border-radius:var(--radius);border:1px solid var(--border);}
+.squeeze-title{font-family:var(--font-display);font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;}
+.squeeze-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.squeeze-item{padding:8px 12px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-1);}
+.squeeze-direction{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px;font-family:var(--font-display);}
+.squeeze-direction.up{color:var(--green);}
+.squeeze-direction.down{color:var(--red);}
+.squeeze-detail{font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.5;}
+
+/* Error toast */
+.error-toast{position:fixed;bottom:24px;right:24px;background:#1a0a0a;border:1px solid var(--red);border-radius:var(--radius-lg);padding:14px 18px;color:var(--red);font-size:12px;max-width:400px;z-index:9999;animation:slideIn .3s ease;}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0;}to{transform:translateX(0);opacity:1;}}
+
+::-webkit-scrollbar{width:4px;height:4px;}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
 </style>
 </head>
 <body>
 
-<!-- ═══════════════════════════════════════════════════════════
-     Header
-═══════════════════════════════════════════════════════════ -->
 <header>
-  <div class="logo">
-    <div class="logo-dot"></div>
-    GEX Monitor
-  </div>
+  <div class="logo"><div class="logo-dot"></div>GEX Monitor</div>
   <div class="header-right">
     <div class="market-status">
       <div class="status-dot" id="status-dot"></div>
@@ -873,170 +153,106 @@ header {
   </div>
 </header>
 
-<!-- ═══════════════════════════════════════════════════════════
-     Tab 导航
-═══════════════════════════════════════════════════════════ -->
 <div class="tabs">
-  <button class="tab-btn active" onclick="switchTab('gex')">GEX 观察</button>
-  <button class="tab-btn" onclick="switchTab('doomsday')">末日观察</button>
+  <button class="tab-btn active" onclick="switchTab('gex',this)">GEX 观察</button>
+  <button class="tab-btn" onclick="switchTab('doomsday',this)">末日观察</button>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════
-     第一部分：GEX 观察
-═══════════════════════════════════════════════════════════ -->
+<!-- ═══ GEX 观察 ═══ -->
 <div class="tab-panel active" id="tab-gex">
   <div class="gex-section">
 
-    <!-- 标的 1 -->
-    <div class="symbol-row" id="gex-row-1">
+    <!-- 标的1 -->
+    <div class="symbol-row">
       <div class="symbol-input-bar">
         <div class="symbol-num">01</div>
         <input class="sym-input" id="gex-sym-1" placeholder="NVDA" maxlength="6" value="NVDA">
         <button class="load-btn" onclick="loadGEX(1)">加载</button>
+        <span style="font-size:10px;color:var(--text-dim)">期货期权请用ETF替代（/ES→SPY, /GC→GLD）</span>
         <span class="update-time" id="gex-update-1">未加载</span>
       </div>
-
-      <!-- 指标栏 -->
-      <div class="metrics-bar" id="gex-metrics-1">
-        <div class="metric-item">
-          <div class="metric-label">现价 Spot</div>
-          <div class="metric-value" id="gex-spot-1">--</div>
-        </div>
-        <div class="metric-item">
-          <div class="metric-label">Gamma Flip</div>
-          <div class="metric-value yellow" id="gex-flip-1">--</div>
-        </div>
-        <div class="metric-item">
-          <div class="metric-label">Call Wall</div>
-          <div class="metric-value green" id="gex-callwall-1">--</div>
-        </div>
-        <div class="metric-item">
-          <div class="metric-label">Put Wall</div>
-          <div class="metric-value red" id="gex-putwall-1">--</div>
-        </div>
-        <div class="metric-item">
-          <div class="metric-label">ATM IV</div>
-          <div class="metric-value blue" id="gex-atmiv-1">--</div>
-        </div>
-        <div class="metric-item">
-          <div class="metric-label">价格位置</div>
-          <div class="metric-value" id="gex-position-1">--</div>
-        </div>
+      <div class="metrics-bar">
+        <div class="metric-item"><div class="metric-label">现价 Spot</div><div class="metric-value" id="gex-spot-1">--</div></div>
+        <div class="metric-item"><div class="metric-label">Gamma Flip</div><div class="metric-value yellow" id="gex-flip-1">--</div></div>
+        <div class="metric-item"><div class="metric-label">Call Wall</div><div class="metric-value green" id="gex-callwall-1">--</div></div>
+        <div class="metric-item"><div class="metric-label">Put Wall</div><div class="metric-value red" id="gex-putwall-1">--</div></div>
+        <div class="metric-item"><div class="metric-label">ATM IV</div><div class="metric-value blue" id="gex-atmiv-1">--</div></div>
+        <div class="metric-item"><div class="metric-label">Gamma 位置</div><div class="metric-value" id="gex-position-1">--</div></div>
       </div>
-
-      <!-- 到期日选择 -->
-      <div class="expiry-section" id="expiry-section-1">
+      <div class="expiry-section">
         <div class="expiry-toggle" onclick="toggleExpiry(1)">
-          <div class="expiry-toggle-label">
-            📅 到期日筛选
-            <span class="selected-summary" id="expiry-summary-1">--</span>
-          </div>
+          <div class="expiry-toggle-label">📅 到期日筛选 <span class="selected-summary" id="expiry-summary-1">--</span></div>
           <div style="display:flex;align-items:center;gap:8px">
             <button class="zoom-btn" onclick="event.stopPropagation();applyExpiry(1)">应用</button>
             <div class="chevron" id="expiry-chevron-1">▼</div>
           </div>
         </div>
         <div class="expiry-content" id="expiry-content-1">
-          <div class="expiry-grid" id="expiry-grid-1">
-            <span style="color:var(--text-dim);font-size:11px">请先输入标的并点击加载</span>
-          </div>
+          <div class="expiry-grid" id="expiry-grid-1"><span style="color:var(--text-dim);font-size:11px">请先加载数据</span></div>
           <div class="expiry-actions">
-            <button class="expiry-action-btn" onclick="selectAllExpiry(1, true)">全选</button>
-            <button class="expiry-action-btn" onclick="selectAllExpiry(1, false)">清除</button>
+            <button class="expiry-action-btn" onclick="selectAllExpiry(1,true)">全选</button>
+            <button class="expiry-action-btn" onclick="selectAllExpiry(1,false)">清除</button>
             <button class="expiry-action-btn" onclick="selectCurrentMonth(1)">本月</button>
           </div>
         </div>
       </div>
-
-      <!-- 图表 -->
       <div class="chart-area">
         <div class="chart-controls">
           <span class="range-label">显示范围</span>
-          <button class="zoom-btn active" onclick="setZoom(1, 20)" id="zoom-1-20">±20</button>
-          <button class="zoom-btn" onclick="setZoom(1, 40)" id="zoom-1-40">±40</button>
-          <button class="zoom-btn" onclick="setZoom(1, 0)" id="zoom-1-all">全部</button>
+          <button class="zoom-btn active" id="zoom-1-20" onclick="setZoom(1,20)">±20</button>
+          <button class="zoom-btn" id="zoom-1-40" onclick="setZoom(1,40)">±40</button>
+          <button class="zoom-btn" id="zoom-1-0" onclick="setZoom(1,0)">全部</button>
         </div>
-        <div class="chart-wrap" style="height:320px;">
-          <div class="chart-loading" id="loading-gex-1">
-            <div class="spinner"></div>
-            <div class="loading-text">等待加载...</div>
-          </div>
+        <div class="chart-wrap" style="height:320px">
+          <div class="chart-loading" id="loading-gex-1"><div class="spinner"></div><div class="loading-text">请输入标的后点击加载</div></div>
           <canvas id="chart-gex-1"></canvas>
         </div>
       </div>
     </div>
 
-    <!-- 标的 2 -->
-    <div class="symbol-row" id="gex-row-2">
+    <!-- 标的2 -->
+    <div class="symbol-row">
       <div class="symbol-input-bar">
         <div class="symbol-num">02</div>
         <input class="sym-input" id="gex-sym-2" placeholder="SPY" maxlength="6" value="SPY">
         <button class="load-btn" onclick="loadGEX(2)">加载</button>
+        <span style="font-size:10px;color:var(--text-dim)">期货期权请用ETF替代（/ES→SPY, /GC→GLD）</span>
         <span class="update-time" id="gex-update-2">未加载</span>
       </div>
-
-      <div class="metrics-bar" id="gex-metrics-2">
-        <div class="metric-item">
-          <div class="metric-label">现价 Spot</div>
-          <div class="metric-value" id="gex-spot-2">--</div>
-        </div>
-        <div class="metric-item">
-          <div class="metric-label">Gamma Flip</div>
-          <div class="metric-value yellow" id="gex-flip-2">--</div>
-        </div>
-        <div class="metric-item">
-          <div class="metric-label">Call Wall</div>
-          <div class="metric-value green" id="gex-callwall-2">--</div>
-        </div>
-        <div class="metric-item">
-          <div class="metric-label">Put Wall</div>
-          <div class="metric-value red" id="gex-putwall-2">--</div>
-        </div>
-        <div class="metric-item">
-          <div class="metric-label">ATM IV</div>
-          <div class="metric-value blue" id="gex-atmiv-2">--</div>
-        </div>
-        <div class="metric-item">
-          <div class="metric-label">价格位置</div>
-          <div class="metric-value" id="gex-position-2">--</div>
-        </div>
+      <div class="metrics-bar">
+        <div class="metric-item"><div class="metric-label">现价 Spot</div><div class="metric-value" id="gex-spot-2">--</div></div>
+        <div class="metric-item"><div class="metric-label">Gamma Flip</div><div class="metric-value yellow" id="gex-flip-2">--</div></div>
+        <div class="metric-item"><div class="metric-label">Call Wall</div><div class="metric-value green" id="gex-callwall-2">--</div></div>
+        <div class="metric-item"><div class="metric-label">Put Wall</div><div class="metric-value red" id="gex-putwall-2">--</div></div>
+        <div class="metric-item"><div class="metric-label">ATM IV</div><div class="metric-value blue" id="gex-atmiv-2">--</div></div>
+        <div class="metric-item"><div class="metric-label">Gamma 位置</div><div class="metric-value" id="gex-position-2">--</div></div>
       </div>
-
-      <div class="expiry-section" id="expiry-section-2">
+      <div class="expiry-section">
         <div class="expiry-toggle" onclick="toggleExpiry(2)">
-          <div class="expiry-toggle-label">
-            📅 到期日筛选
-            <span class="selected-summary" id="expiry-summary-2">--</span>
-          </div>
+          <div class="expiry-toggle-label">📅 到期日筛选 <span class="selected-summary" id="expiry-summary-2">--</span></div>
           <div style="display:flex;align-items:center;gap:8px">
             <button class="zoom-btn" onclick="event.stopPropagation();applyExpiry(2)">应用</button>
             <div class="chevron" id="expiry-chevron-2">▼</div>
           </div>
         </div>
         <div class="expiry-content" id="expiry-content-2">
-          <div class="expiry-grid" id="expiry-grid-2">
-            <span style="color:var(--text-dim);font-size:11px">请先输入标的并点击加载</span>
-          </div>
+          <div class="expiry-grid" id="expiry-grid-2"><span style="color:var(--text-dim);font-size:11px">请先加载数据</span></div>
           <div class="expiry-actions">
-            <button class="expiry-action-btn" onclick="selectAllExpiry(2, true)">全选</button>
-            <button class="expiry-action-btn" onclick="selectAllExpiry(2, false)">清除</button>
+            <button class="expiry-action-btn" onclick="selectAllExpiry(2,true)">全选</button>
+            <button class="expiry-action-btn" onclick="selectAllExpiry(2,false)">清除</button>
             <button class="expiry-action-btn" onclick="selectCurrentMonth(2)">本月</button>
           </div>
         </div>
       </div>
-
       <div class="chart-area">
         <div class="chart-controls">
           <span class="range-label">显示范围</span>
-          <button class="zoom-btn active" onclick="setZoom(2, 20)" id="zoom-2-20">±20</button>
-          <button class="zoom-btn" onclick="setZoom(2, 40)" id="zoom-2-40">±40</button>
-          <button class="zoom-btn" onclick="setZoom(2, 0)" id="zoom-2-all">全部</button>
+          <button class="zoom-btn active" id="zoom-2-20" onclick="setZoom(2,20)">±20</button>
+          <button class="zoom-btn" id="zoom-2-40" onclick="setZoom(2,40)">±40</button>
+          <button class="zoom-btn" id="zoom-2-0" onclick="setZoom(2,0)">全部</button>
         </div>
-        <div class="chart-wrap" style="height:320px;">
-          <div class="chart-loading" id="loading-gex-2">
-            <div class="spinner"></div>
-            <div class="loading-text">等待加载...</div>
-          </div>
+        <div class="chart-wrap" style="height:320px">
+          <div class="chart-loading" id="loading-gex-2"><div class="spinner"></div><div class="loading-text">请输入标的后点击加载</div></div>
           <canvas id="chart-gex-2"></canvas>
         </div>
       </div>
@@ -1045,140 +261,88 @@ header {
   </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════
-     第二部分：末日观察
-═══════════════════════════════════════════════════════════ -->
+<!-- ═══ 末日观察 ═══ -->
 <div class="tab-panel" id="tab-doomsday">
   <div class="doomsday-section">
 
-    <!-- 输入栏 -->
     <div class="doom-input-bar">
       <div class="doom-label">⚡ 末日</div>
       <input class="sym-input" id="doom-sym" placeholder="SPY" maxlength="6" value="SPY">
-      <button class="load-btn" style="background:var(--red);color:#fff;" onclick="loadDoomsday()">加载末日数据</button>
+      <button class="load-btn" style="background:var(--red);color:#fff" onclick="loadDoomsday()">加载末日数据</button>
       <span class="update-time" id="doom-update">未加载</span>
-
-      <!-- 末日指标 -->
       <div style="display:flex;gap:0;margin-left:auto;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;">
-        <div class="metric-item" style="border-right:1px solid var(--border);">
-          <div class="metric-label">到期日</div>
-          <div class="metric-value yellow" id="doom-exp-date">--</div>
-        </div>
-        <div class="metric-item" style="border-right:1px solid var(--border);">
-          <div class="metric-label">现价</div>
-          <div class="metric-value" id="doom-spot">--</div>
-        </div>
-        <div class="metric-item" style="border-right:1px solid var(--border);">
-          <div class="metric-label">Call Wall</div>
-          <div class="metric-value green" id="doom-callwall">--</div>
-        </div>
-        <div class="metric-item" style="border-right:1px solid var(--border);">
-          <div class="metric-label">Put Wall</div>
-          <div class="metric-value red" id="doom-putwall">--</div>
-        </div>
-        <div class="metric-item" style="border-right:1px solid var(--border);">
-          <div class="metric-label">Flip点</div>
-          <div class="metric-value yellow" id="doom-flip">--</div>
-        </div>
-        <div class="metric-item">
-          <div class="metric-label">Max GEX</div>
-          <div class="metric-value green" id="doom-maxgex">--</div>
-        </div>
+        <div class="metric-item" style="border-right:1px solid var(--border)"><div class="metric-label">到期日</div><div class="metric-value yellow" id="doom-exp-date">--</div></div>
+        <div class="metric-item" style="border-right:1px solid var(--border)"><div class="metric-label">现价</div><div class="metric-value" id="doom-spot">--</div></div>
+        <div class="metric-item" style="border-right:1px solid var(--border)"><div class="metric-label">Call Wall</div><div class="metric-value green" id="doom-callwall">--</div></div>
+        <div class="metric-item" style="border-right:1px solid var(--border)"><div class="metric-label">Put Wall</div><div class="metric-value red" id="doom-putwall">--</div></div>
+        <div class="metric-item" style="border-right:1px solid var(--border)"><div class="metric-label">Flip点</div><div class="metric-value yellow" id="doom-flip">--</div></div>
+        <div class="metric-item"><div class="metric-label">ATM IV</div><div class="metric-value blue" id="doom-atmiv">--</div></div>
       </div>
     </div>
 
-    <!-- 单元①：0DTE GEX分布 -->
+    <!-- 单元① -->
     <div class="doom-unit">
       <div class="doom-unit-header">
-        <div class="doom-unit-title">
-          <div class="unit-num">1</div>
-          0DTE GEX 分布 — 最近到期日
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <button class="zoom-btn active" onclick="setDoomZoom(20)" id="dzoom-20">±20</button>
-          <button class="zoom-btn" onclick="setDoomZoom(40)" id="dzoom-40">±40</button>
-          <button class="zoom-btn" onclick="setDoomZoom(0)" id="dzoom-all">全部</button>
+        <div class="doom-unit-title"><div class="unit-num">1</div>0DTE GEX 分布 — 最近到期日</div>
+        <div style="display:flex;gap:8px">
+          <button class="zoom-btn active" id="dzoom-20" onclick="setDoomZoom(20)">±20</button>
+          <button class="zoom-btn" id="dzoom-40" onclick="setDoomZoom(40)">±40</button>
+          <button class="zoom-btn" id="dzoom-0" onclick="setDoomZoom(0)">全部</button>
         </div>
       </div>
       <div class="doom-chart-area">
-        <div class="chart-wrap" style="height:300px;">
-          <div class="chart-loading" id="loading-doom-1">
-            <div class="spinner"></div>
-            <div class="loading-text">等待加载...</div>
-          </div>
+        <div class="chart-wrap" style="height:300px">
+          <div class="chart-loading" id="loading-doom-1"><div class="spinner"></div><div class="loading-text">请加载末日数据</div></div>
           <canvas id="chart-doom-1"></canvas>
         </div>
       </div>
     </div>
 
-    <!-- 单元②：Vol/OI 比率 -->
+    <!-- 单元② -->
     <div class="doom-unit">
       <div class="doom-unit-header">
-        <div class="doom-unit-title">
-          <div class="unit-num">2</div>
-          成交量 / 未平仓合约 比率（Vol/OI）
-        </div>
-        <div style="font-size:11px;color:var(--text-dim)">热度越高 → 市场关注度越强</div>
+        <div class="doom-unit-title"><div class="unit-num">2</div>成交量 / 未平仓合约 比率（Vol/OI）</div>
+        <div style="font-size:11px;color:var(--text-dim)">与上方GEX图行权价对齐 · 颜色越深表示活跃度越高</div>
       </div>
-      <div class="doom-chart-area">
-        <div class="chart-wrap" style="height:180px;">
-          <div class="chart-loading" id="loading-doom-2">
-            <div class="spinner"></div>
-            <div class="loading-text">等待加载...</div>
-          </div>
+      <div class="doom-chart-area" style="padding:8px 16px 16px">
+        <div class="chart-wrap" style="height:160px">
+          <div class="chart-loading" id="loading-doom-2"><div class="spinner"></div><div class="loading-text">请加载末日数据</div></div>
           <canvas id="chart-doom-2"></canvas>
         </div>
       </div>
     </div>
 
-    <!-- 单元③：日内IV曲线 -->
+    <!-- 单元③ -->
     <div class="doom-unit">
       <div class="doom-unit-header">
-        <div class="doom-unit-title">
-          <div class="unit-num">3</div>
-          关键行权价 日内 IV 变化
-        </div>
+        <div class="doom-unit-title"><div class="unit-num">3</div>关键行权价 日内 IV 变化</div>
       </div>
-
-      <!-- 行权价选择标签 -->
       <div class="iv-strike-selector" id="iv-strike-tags">
-        <span style="color:var(--text-dim);font-size:11px">加载数据后显示Call/Put墙行权价</span>
+        <span style="color:var(--text-dim);font-size:11px">加载后显示Call/Put墙行权价</span>
       </div>
-
-      <!-- 自定义行权价输入 -->
       <div class="iv-custom-input">
         <span class="iv-custom-label">自定义行权价：</span>
         <input class="iv-strike-input" id="iv-custom-strike" type="number" placeholder="190">
         <button class="iv-add-btn" onclick="addCustomIVStrike()">添加</button>
       </div>
-
       <div class="doom-chart-area">
-        <div class="chart-wrap" style="height:240px;">
-          <div class="chart-loading" id="loading-doom-3">
-            <div class="spinner"></div>
-            <div class="loading-text">等待加载...</div>
-          </div>
+        <div class="chart-wrap" style="height:240px">
+          <div class="chart-loading" id="loading-doom-3"><div class="spinner"></div><div class="loading-text">请加载末日数据</div></div>
           <canvas id="chart-doom-3"></canvas>
         </div>
       </div>
-
-      <!-- Gamma Squeeze 判断面板 -->
       <div class="squeeze-panel">
-        <div class="squeeze-title">⚡ Gamma Squeeze 判断逻辑</div>
+        <div class="squeeze-title">⚡ Gamma Squeeze 判断（三条件同时满足 = 高风险）</div>
         <div class="squeeze-grid">
           <div class="squeeze-item">
-            <div class="squeeze-direction up">▲ 上方挤压（看涨 Gamma Squeeze）</div>
-            <div class="squeeze-signal" id="squeeze-up-signal">等待数据...</div>
-            <div class="squeeze-detail" id="squeeze-up-detail">
-              条件：① 价格距Call Wall ≤ 1% ② Call Wall IV持续上升 ③ Call Wall Vol/OI > 0.3
-            </div>
+            <div class="squeeze-direction up">▲ 看涨挤压（突破Call Wall）</div>
+            <div style="font-size:13px;font-weight:600;margin:4px 0" id="squeeze-up-signal">等待数据...</div>
+            <div class="squeeze-detail" id="squeeze-up-detail">条件：①距Call Wall≤1% ②Call Wall IV持续上升 ③Vol/OI>0.3</div>
           </div>
           <div class="squeeze-item">
-            <div class="squeeze-direction down">▼ 下方挤压（看跌 Gamma Squeeze）</div>
-            <div class="squeeze-signal" id="squeeze-down-signal">等待数据...</div>
-            <div class="squeeze-detail" id="squeeze-down-detail">
-              条件：① 价格距Put Wall ≤ 1% ② Put Wall IV持续上升 ③ Put Wall Vol/OI > 0.3
-            </div>
+            <div class="squeeze-direction down">▼ 看跌挤压（跌破Put Wall）</div>
+            <div style="font-size:13px;font-weight:600;margin:4px 0" id="squeeze-down-signal">等待数据...</div>
+            <div class="squeeze-detail" id="squeeze-down-detail">条件：①距Put Wall≤1% ②Put Wall IV持续上升 ③Vol/OI>0.3</div>
           </div>
         </div>
       </div>
@@ -1187,247 +351,172 @@ header {
   </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════
-     JavaScript
-═══════════════════════════════════════════════════════════ -->
 <script>
-// ─── 配置 ──────────────────────────────────────────────────────────────────────
-// 部署后替换为你的 Worker URL
+// ─── 配置 ─────────────────────────────────────────────────────────────────────
 const WORKER_URL = 'https://gex-monitor-worker.fibitrader.workers.dev';
 
 // ─── 状态 ─────────────────────────────────────────────────────────────────────
 const state = {
   gex: {
-    1: { data: null, expirations: [], selectedDates: [], zoomRange: 20, chart: null },
-    2: { data: null, expirations: [], selectedDates: [], zoomRange: 20, chart: null },
+    1: { data:null, expirations:[], selectedDates:[], zoomRange:20, chart:null },
+    2: { data:null, expirations:[], selectedDates:[], zoomRange:20, chart:null },
   },
   doom: {
-    data: null,
-    ivHistory: [],
-    selectedStrikes: new Set(),
-    customStrikes: new Set(),
-    zoomRange: 20,
-    charts: { c1: null, c2: null, c3: null },
+    data:null, ivHistory:[], selectedStrikes:new Set(), customStrikes:new Set(),
+    zoomRange:20, sharedLabels:[], charts:{c1:null,c2:null,c3:null}
   },
 };
 
-let refreshTimer = null;
-
-// ─── Tab 切换 ─────────────────────────────────────────────────────────────────
-function switchTab(tab) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  document.getElementById(`tab-${tab}`).classList.add('active');
-  event.currentTarget.classList.add('active');
-}
-
-// ─── 时钟 & 市场状态 ──────────────────────────────────────────────────────────
-function updateClock() {
-  const now = new Date();
-  const etStr = now.toLocaleString('zh-CN', {
-    timeZone: 'America/New_York',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-  });
-  document.getElementById('global-time').textContent = etStr + ' ET';
-
-  // 判断市场时间
-  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const day = et.getDay();
-  const h = et.getHours(), m = et.getMinutes();
-  const mins = h * 60 + m;
-  const isOpen = day >= 1 && day <= 5 && mins >= 8 * 60 + 30 && mins < 16 * 60;
-  const isPreMarket = day >= 1 && day <= 5 && mins >= 8 * 60 + 30 && mins < 9 * 60 + 30;
-
-  const dot = document.getElementById('status-dot');
-  const txt = document.getElementById('market-status-text');
-  if (day === 0 || day === 6) {
-    dot.className = 'status-dot closed';
-    txt.textContent = '周末休市';
-  } else if (mins < 8 * 60 + 30) {
-    dot.className = 'status-dot';
-    txt.textContent = '盘前';
-  } else if (isPreMarket) {
-    dot.className = 'status-dot active';
-    txt.textContent = '监控中（盘前）';
-  } else if (isOpen) {
-    dot.className = 'status-dot active';
-    txt.textContent = '盘中';
-  } else {
-    dot.className = 'status-dot closed';
-    txt.textContent = '已收盘';
-  }
-}
-
-setInterval(updateClock, 1000);
-updateClock();
-
-// ─── API 调用 ─────────────────────────────────────────────────────────────────
-async function apiFetch(path) {
-  const url = `${WORKER_URL}${path}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
-  return res.json();
-}
-
-// ─── 数字格式化 ───────────────────────────────────────────────────────────────
-function fmtGEX(v) {
-  const abs = Math.abs(v);
-  if (abs >= 1e9) return (v / 1e9).toFixed(2) + 'B';
-  if (abs >= 1e6) return (v / 1e6).toFixed(1) + 'M';
-  if (abs >= 1e3) return (v / 1e3).toFixed(1) + 'K';
-  return v.toFixed(0);
-}
-
-function fmtPrice(v) {
-  return v != null ? v.toFixed(2) : '--';
-}
-
-function fmtPct(v) {
-  return v != null ? v.toFixed(2) + '%' : '--';
-}
-
-// ─── 图表通用配置 ─────────────────────────────────────────────────────────────
+// ─── Chart.js 全局默认 ────────────────────────────────────────────────────────
 Chart.defaults.color = '#8899aa';
-Chart.defaults.borderColor = '#1e2d42';
+Chart.defaults.borderColor = '#1e2d4240';
 Chart.defaults.font.family = "'JetBrains Mono', monospace";
 Chart.defaults.font.size = 11;
 
-function getGEXChartConfig(data, spotPrice, gammaFlip, callWall, putWall, zoomRange) {
-  const st = data.strikes;
-  let filtered = st;
+// ─── Tab ──────────────────────────────────────────────────────────────────────
+function switchTab(tab, btn) {
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+  btn.classList.add('active');
+}
 
-  if (zoomRange > 0 && spotPrice) {
-    filtered = st.filter(s => Math.abs(s.strike - spotPrice) <= zoomRange);
-  }
+// ─── 时钟 ────────────────────────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  const etStr = now.toLocaleString('zh-CN',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  document.getElementById('global-time').textContent = etStr + ' ET';
+  const et = new Date(now.toLocaleString('en-US',{timeZone:'America/New_York'}));
+  const day = et.getDay(), mins = et.getHours()*60+et.getMinutes();
+  const isOpen = day>=1&&day<=5&&mins>=8*60+30&&mins<16*60;
+  const isPreMkt = day>=1&&day<=5&&mins>=8*60+30&&mins<9*60+30;
+  const dot = document.getElementById('status-dot');
+  const txt = document.getElementById('market-status-text');
+  if(day===0||day===6){dot.className='status-dot closed';txt.textContent='周末休市';}
+  else if(mins<8*60+30){dot.className='status-dot';txt.textContent='盘前准备中';}
+  else if(isPreMkt){dot.className='status-dot active';txt.textContent='监控中（盘前）';}
+  else if(isOpen){dot.className='status-dot active';txt.textContent='盘中';}
+  else{dot.className='status-dot closed';txt.textContent='已收盘';}
+}
+setInterval(updateClock,1000);
+updateClock();
 
-  const labels = filtered.map(s => s.strike);
-  const callGex = filtered.map(s => s.callGex / 1e6);
-  const putGex = filtered.map(s => s.putGex / 1e6);
+// ─── API ─────────────────────────────────────────────────────────────────────
+async function apiFetch(path) {
+  const res = await fetch(WORKER_URL + path);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
 
-  // 聚合GEX曲线（右轴）
+// ─── 格式化 ──────────────────────────────────────────────────────────────────
+const fmt2 = v => v!=null ? v.toFixed(2) : '--';
+const fmtIV = v => v!=null&&v>0 ? v.toFixed(2)+'%' : '--';
+function fmtGEX(v){const a=Math.abs(v);if(a>=1e9)return(v/1e9).toFixed(2)+'B';if(a>=1e6)return(v/1e6).toFixed(1)+'M';if(a>=1e3)return(v/1e3).toFixed(1)+'K';return v.toFixed(0);}
+
+// ─── 显示错误 ────────────────────────────────────────────────────────────────
+function showError(msg) {
+  const el = document.createElement('div');
+  el.className = 'error-toast';
+  el.textContent = '❌ ' + msg;
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(), 6000);
+}
+
+// ─── Loading ─────────────────────────────────────────────────────────────────
+function setLoading(id, on, msg='加载中...') {
+  const el = document.getElementById(id);
+  if(!el)return;
+  if(on){el.classList.remove('hidden');el.querySelector('.loading-text').textContent=msg;}
+  else el.classList.add('hidden');
+}
+
+// ─── 找最近行权价（用于category轴annotation）────────────────────────────────
+function nearestStrikeLabel(labels, price) {
+  if(!price||!labels.length)return null;
+  return labels.reduce((prev,curr)=>Math.abs(Number(curr)-price)<Math.abs(Number(prev)-price)?curr:prev);
+}
+
+// ─── 构建GEX图表配置 ─────────────────────────────────────────────────────────
+function buildGEXConfig(data, zoomRange) {
+  const spot = data.spotPrice;
+  let filtered = data.strikes;
+  if(zoomRange>0&&spot) filtered = data.strikes.filter(s=>Math.abs(s.strike-spot)<=zoomRange);
+
+  const labels = filtered.map(s=>String(s.strike));
+  const callGex = filtered.map(s=>s.callGex/1e6);
+  const putGex  = filtered.map(s=>s.putGex/1e6);
+
+  // 聚合GEX曲线（用原始strikes的aggregateGex做映射）
   const aggMap = {};
-  data.strikes.forEach((s, i) => { aggMap[s.strike] = data.aggregateGex[i] / 1e9; });
-  const aggValues = filtered.map(s => aggMap[s.strike] || 0);
+  data.strikes.forEach((s,i)=>{aggMap[s.strike]=data.aggregateGex[i]/1e9;});
+  const aggValues = filtered.map(s=>aggMap[s.strike]??0);
+
+  // 找最近行权价label
+  const spotLabel    = nearestStrikeLabel(labels, spot);
+  const flipLabel    = nearestStrikeLabel(labels, data.gammaFlip);
+  const callWallLabel= nearestStrikeLabel(labels, data.callWall);
+  const putWallLabel = nearestStrikeLabel(labels, data.putWall);
 
   const annotations = {};
 
-  // Gamma Flip
-  if (gammaFlip) {
-    annotations.gammaFlip = {
-      type: 'line', xMin: gammaFlip, xMax: gammaFlip,
-      borderColor: '#ff4757', borderWidth: 1.5, borderDash: [4, 4],
-      label: { display: true, content: `Flip ${fmtPrice(gammaFlip)}`, position: 'start',
-               color: '#ff4757', backgroundColor: 'transparent', font: { size: 10 } }
-    };
-  }
+  if(flipLabel) annotations.flip = {
+    type:'line', xMin:flipLabel, xMax:flipLabel,
+    borderColor:'#ff4757', borderWidth:1.5, borderDash:[5,4],
+    label:{display:true,content:`Flip ${fmt2(data.gammaFlip)}`,position:'start',
+           color:'#ff4757',backgroundColor:'rgba(8,11,15,0.8)',font:{size:10}}
+  };
 
-  // Spot Price
-  if (spotPrice) {
-    annotations.spot = {
-      type: 'line', xMin: spotPrice, xMax: spotPrice,
-      borderColor: '#00d084', borderWidth: 2,
-      label: { display: true, content: `${fmtPrice(spotPrice)}`, position: 'start',
-               color: '#00d084', backgroundColor: 'transparent', font: { size: 10, weight: 'bold' } }
-    };
-  }
+  if(spotLabel) annotations.spot = {
+    type:'line', xMin:spotLabel, xMax:spotLabel,
+    borderColor:'#00d084', borderWidth:2,
+    label:{display:true,content:fmt2(spot),position:'start',
+           color:'#00d084',backgroundColor:'rgba(8,11,15,0.8)',font:{size:10,weight:'bold'}}
+  };
 
-  // Call Wall
-  if (callWall && (!zoomRange || Math.abs(callWall - spotPrice) <= zoomRange)) {
-    annotations.callWall = {
-      type: 'line', xMin: callWall, xMax: callWall,
-      borderColor: '#00d08480', borderWidth: 1, borderDash: [3, 3],
-      label: { display: true, content: `CW ${callWall}`, position: 'end',
-               color: '#00d084', backgroundColor: 'transparent', font: { size: 9 } }
-    };
-  }
+  if(callWallLabel&&callWallLabel!==spotLabel) annotations.callWall = {
+    type:'line', xMin:callWallLabel, xMax:callWallLabel,
+    borderColor:'#00d08470', borderWidth:1, borderDash:[4,3],
+    label:{display:true,content:`CW ${data.callWall}`,position:'end',
+           color:'#00d084',backgroundColor:'rgba(8,11,15,0.8)',font:{size:9}}
+  };
 
-  // Put Wall
-  if (putWall && (!zoomRange || Math.abs(putWall - spotPrice) <= zoomRange)) {
-    annotations.putWall = {
-      type: 'line', xMin: putWall, xMax: putWall,
-      borderColor: '#ff475780', borderWidth: 1, borderDash: [3, 3],
-      label: { display: true, content: `PW ${putWall}`, position: 'end',
-               color: '#ff4757', backgroundColor: 'transparent', font: { size: 9 } }
-    };
-  }
+  if(putWallLabel&&putWallLabel!==spotLabel) annotations.putWall = {
+    type:'line', xMin:putWallLabel, xMax:putWallLabel,
+    borderColor:'#ff475770', borderWidth:1, borderDash:[4,3],
+    label:{display:true,content:`PW ${data.putWall}`,position:'end',
+           color:'#ff4757',backgroundColor:'rgba(8,11,15,0.8)',font:{size:9}}
+  };
 
   return {
-    type: 'bar',
-    data: {
+    type:'bar',
+    data:{
       labels,
-      datasets: [
-        {
-          label: 'Call GEX (M)',
-          data: callGex,
-          backgroundColor: '#00d08460',
-          borderColor: '#00d084',
-          borderWidth: 1,
-          yAxisID: 'y',
-        },
-        {
-          label: 'Put GEX (M)',
-          data: putGex,
-          backgroundColor: '#ff475760',
-          borderColor: '#ff4757',
-          borderWidth: 1,
-          yAxisID: 'y',
-        },
-        {
-          label: '聚合 GEX (B)',
-          data: aggValues,
-          type: 'line',
-          yAxisID: 'y2',
-          borderColor: '#1e90ff',
-          borderWidth: 2,
-          pointRadius: 0,
-          tension: 0.4,
-          fill: false,
-        },
+      datasets:[
+        {label:'Call GEX (M)',data:callGex,backgroundColor:'#00d08450',borderColor:'#00d084',borderWidth:1,yAxisID:'y'},
+        {label:'Put GEX (M)',data:putGex,backgroundColor:'#ff475750',borderColor:'#ff4757',borderWidth:1,yAxisID:'y'},
+        {label:'聚合 GEX (B)',data:aggValues,type:'line',yAxisID:'y2',borderColor:'#1e90ff',borderWidth:2,pointRadius:0,tension:0.4,fill:false},
       ]
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: {
-          labels: { boxWidth: 12, padding: 16, color: '#8899aa' }
-        },
-        annotation: { annotations },
-        tooltip: {
-          backgroundColor: '#131922',
-          borderColor: '#1e2d42',
-          borderWidth: 1,
-          callbacks: {
-            label: ctx => {
-              const v = ctx.raw;
-              if (ctx.datasetIndex === 2) return `聚合 GEX: ${v.toFixed(3)}B`;
-              return `${ctx.dataset.label}: ${v.toFixed(1)}M`;
-            }
-          }
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{boxWidth:12,padding:16}},
+        annotation:{annotations},
+        tooltip:{
+          backgroundColor:'#131922',borderColor:'#1e2d42',borderWidth:1,
+          callbacks:{label:ctx=>{
+            const v=ctx.raw;
+            if(ctx.datasetIndex===2)return `聚合GEX: ${v.toFixed(3)}B`;
+            return `${ctx.dataset.label}: ${v.toFixed(1)}M`;
+          }}
         }
       },
-      scales: {
-        x: {
-          type: 'category',
-          grid: { color: '#1e2d4240' },
-          ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 20 }
-        },
-        y: {
-          position: 'left',
-          grid: { color: '#1e2d4240' },
-          title: { display: true, text: 'GEX (M)', color: '#4a5a6a' },
-          stacked: false,
-        },
-        y2: {
-          position: 'right',
-          grid: { display: false },
-          title: { display: true, text: '聚合 GEX (B)', color: '#1e90ff60' },
-          ticks: { color: '#1e90ff80' }
-        }
+      scales:{
+        x:{type:'category',grid:{color:'#1e2d4220'},ticks:{maxRotation:45,autoSkip:true,maxTicksLimit:24}},
+        y:{position:'left',grid:{color:'#1e2d4220'},title:{display:true,text:'GEX (M)',color:'#4a5a6a'}},
+        y2:{position:'right',grid:{display:false},title:{display:true,text:'聚合 GEX (B)',color:'#1e90ff50'},ticks:{color:'#1e90ff80'}}
       }
     }
   };
@@ -1436,697 +525,426 @@ function getGEXChartConfig(data, spotPrice, gammaFlip, callWall, putWall, zoomRa
 // ─── GEX 加载 ─────────────────────────────────────────────────────────────────
 async function loadGEX(idx) {
   const sym = document.getElementById(`gex-sym-${idx}`).value.trim().toUpperCase();
-  if (!sym) return alert('请输入标的代码');
-
-  setLoading(`loading-gex-${idx}`, true);
-
+  if(!sym)return showError('请输入标的代码');
+  setLoading(`loading-gex-${idx}`,true,'获取到期日列表...');
   try {
-    // 先获取到期日列表
     const expData = await apiFetch(`/api/expirations?symbol=${sym}`);
     state.gex[idx].expirations = expData.dates;
-
-    // 默认选当月+次月
     const now = new Date();
-    const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const nextMonth = `${now.getFullYear()}-${String(now.getMonth() + 2).padStart(2, '0')}`;
-    state.gex[idx].selectedDates = expData.dates.filter(d => d.startsWith(thisMonth) || d.startsWith(nextMonth));
-
-    // 渲染到期日选择器
+    const m0 = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const m1 = `${now.getFullYear()}-${String(now.getMonth()+2).padStart(2,'0')}`;
+    state.gex[idx].selectedDates = expData.dates.filter(d=>d.startsWith(m0)||d.startsWith(m1));
     renderExpiryChips(idx, expData.dates, state.gex[idx].selectedDates);
-
-    // 加载GEX数据
     await fetchAndRenderGEX(idx, sym);
-
-  } catch (e) {
-    setLoading(`loading-gex-${idx}`, false);
-    alert(`加载失败: ${e.message}`);
+  } catch(e) {
+    setLoading(`loading-gex-${idx}`,false);
+    showError(e.message);
   }
 }
 
 async function fetchAndRenderGEX(idx, sym) {
-  if (!sym) sym = document.getElementById(`gex-sym-${idx}`).value.trim().toUpperCase();
-  setLoading(`loading-gex-${idx}`, true);
-
+  if(!sym) sym = document.getElementById(`gex-sym-${idx}`).value.trim().toUpperCase();
+  setLoading(`loading-gex-${idx}`,true,'计算GEX...');
   try {
-    const selectedDates = state.gex[idx].selectedDates;
-    const datesParam = selectedDates.length ? `&dates=${selectedDates.join(',')}` : '';
+    const sel = state.gex[idx].selectedDates;
+    const datesParam = sel.length ? `&dates=${sel.join(',')}` : '';
     const data = await apiFetch(`/api/gex?symbol=${sym}${datesParam}`);
     state.gex[idx].data = data;
 
     // 更新指标
-    document.getElementById(`gex-spot-${idx}`).textContent = fmtPrice(data.spotPrice);
-    document.getElementById(`gex-flip-${idx}`).textContent = fmtPrice(data.gammaFlip);
-    document.getElementById(`gex-callwall-${idx}`).textContent = fmtPrice(data.callWall);
-    document.getElementById(`gex-putwall-${idx}`).textContent = fmtPrice(data.putWall);
-    document.getElementById(`gex-atmiv-${idx}`).textContent = fmtPct(data.atmIV);
+    document.getElementById(`gex-spot-${idx}`).textContent = fmt2(data.spotPrice);
+    document.getElementById(`gex-flip-${idx}`).textContent = fmt2(data.gammaFlip);
+    document.getElementById(`gex-callwall-${idx}`).textContent = fmt2(data.callWall);
+    document.getElementById(`gex-putwall-${idx}`).textContent = fmt2(data.putWall);
+    document.getElementById(`gex-atmiv-${idx}`).textContent = fmtIV(data.atmIV);
     document.getElementById(`gex-update-${idx}`).textContent = data.updatedAt;
 
-    // 价格位置
     const posEl = document.getElementById(`gex-position-${idx}`);
-    if (data.spotPrice && data.gammaFlip) {
-      if (data.spotPrice > data.gammaFlip) {
-        posEl.textContent = '正Gamma ▲';
-        posEl.className = 'metric-value green';
-      } else {
-        posEl.textContent = '负Gamma ▼';
-        posEl.className = 'metric-value red';
-      }
+    if(data.spotPrice&&data.gammaFlip){
+      if(data.spotPrice>data.gammaFlip){posEl.textContent='正Gamma ▲';posEl.className='metric-value green';}
+      else{posEl.textContent='负Gamma ▼';posEl.className='metric-value red';}
     }
 
-    // 渲染图表
     renderGEXChart(idx, data);
-    document.getElementById(`gex-update-${idx}`).textContent = data.updatedAt;
-
-  } catch (e) {
-    alert(`数据获取失败: ${e.message}`);
+  } catch(e) {
+    showError(e.message);
   } finally {
-    setLoading(`loading-gex-${idx}`, false);
+    setLoading(`loading-gex-${idx}`,false);
   }
 }
 
 function renderGEXChart(idx, data) {
   const canvas = document.getElementById(`chart-gex-${idx}`);
-  if (state.gex[idx].chart) {
-    state.gex[idx].chart.destroy();
-  }
-
-  const zoomRange = state.gex[idx].zoomRange;
-  const cfg = getGEXChartConfig(data, data.spotPrice, data.gammaFlip, data.callWall, data.putWall, zoomRange);
+  if(state.gex[idx].chart){state.gex[idx].chart.destroy();state.gex[idx].chart=null;}
+  const cfg = buildGEXConfig(data, state.gex[idx].zoomRange);
   state.gex[idx].chart = new Chart(canvas, cfg);
 }
 
-// ─── 缩放控制 ─────────────────────────────────────────────────────────────────
+// ─── 缩放 ────────────────────────────────────────────────────────────────────
 function setZoom(idx, range) {
   state.gex[idx].zoomRange = range;
-  // 更新按钮状态
-  [20, 40, 0].forEach(r => {
-    const suffix = r === 0 ? 'all' : r;
-    const btn = document.getElementById(`zoom-${idx}-${suffix}`);
-    if (btn) btn.classList.toggle('active', r === range);
+  [20,40,0].forEach(r=>{
+    const id = `zoom-${idx}-${r===0?'0':r}`;
+    const btn = document.getElementById(id);
+    if(btn)btn.classList.toggle('active',r===range);
   });
-
-  if (state.gex[idx].data) {
-    renderGEXChart(idx, state.gex[idx].data);
-  }
+  if(state.gex[idx].data) renderGEXChart(idx, state.gex[idx].data);
 }
 
 function setDoomZoom(range) {
   state.doom.zoomRange = range;
-  [20, 40, 0].forEach(r => {
-    const suffix = r === 0 ? 'all' : r;
-    const btn = document.getElementById(`dzoom-${suffix}`);
-    if (btn) btn.classList.toggle('active', r === range);
+  [20,40,0].forEach(r=>{
+    const btn = document.getElementById(`dzoom-${r===0?'0':r}`);
+    if(btn)btn.classList.toggle('active',r===range);
   });
-  if (state.doom.data) renderDoomCharts(state.doom.data);
+  if(state.doom.data) renderDoomCharts(state.doom.data);
 }
 
-// ─── 到期日选择器 ─────────────────────────────────────────────────────────────
+// ─── 到期日 ───────────────────────────────────────────────────────────────────
 function renderExpiryChips(idx, allDates, selectedDates) {
   const grid = document.getElementById(`expiry-grid-${idx}`);
-  grid.innerHTML = '';
-
-  allDates.forEach(date => {
-    const isSelected = selectedDates.includes(date);
+  grid.innerHTML='';
+  allDates.forEach(date=>{
+    const isSel = selectedDates.includes(date);
     const chip = document.createElement('label');
-    chip.className = `expiry-chip ${isSelected ? 'selected' : ''}`;
-
-    // 判断是否是周到期/月到期
-    const d = new Date(date + 'T00:00:00');
-    const dayOfWeek = d.getDay();
-    const isMonthly = dayOfWeek === 5 && (d.getDate() >= 15 && d.getDate() <= 21); // 第3个周五
-    const label = isMonthly ? `📌 ${date}` : date;
-
-    chip.innerHTML = `<input type="checkbox" value="${date}" ${isSelected ? 'checked' : ''}> ${label}`;
-    chip.querySelector('input').addEventListener('change', (e) => {
-      if (e.target.checked) {
-        if (!state.gex[idx].selectedDates.includes(date)) state.gex[idx].selectedDates.push(date);
-        chip.classList.add('selected');
-      } else {
-        state.gex[idx].selectedDates = state.gex[idx].selectedDates.filter(d => d !== date);
-        chip.classList.remove('selected');
-      }
+    chip.className = `expiry-chip${isSel?' selected':''}`;
+    chip.innerHTML = `<input type="checkbox" value="${date}"${isSel?' checked':''}> ${date}`;
+    chip.querySelector('input').addEventListener('change',e=>{
+      if(e.target.checked){if(!state.gex[idx].selectedDates.includes(date))state.gex[idx].selectedDates.push(date);chip.classList.add('selected');}
+      else{state.gex[idx].selectedDates=state.gex[idx].selectedDates.filter(d=>d!==date);chip.classList.remove('selected');}
       updateExpirySummary(idx);
     });
-
     grid.appendChild(chip);
   });
-
   updateExpirySummary(idx);
 }
-
-function updateExpirySummary(idx) {
-  const n = state.gex[idx].selectedDates.length;
-  document.getElementById(`expiry-summary-${idx}`).textContent = n > 0 ? `已选 ${n} 个` : '未选择';
+function updateExpirySummary(idx){
+  const n=state.gex[idx].selectedDates.length;
+  document.getElementById(`expiry-summary-${idx}`).textContent=n>0?`已选 ${n} 个`:'未选择';
 }
-
-function toggleExpiry(idx) {
-  const content = document.getElementById(`expiry-content-${idx}`);
-  const chevron = document.getElementById(`expiry-chevron-${idx}`);
-  content.classList.toggle('open');
-  chevron.classList.toggle('open');
+function toggleExpiry(idx){
+  document.getElementById(`expiry-content-${idx}`).classList.toggle('open');
+  document.getElementById(`expiry-chevron-${idx}`).classList.toggle('open');
 }
-
-function selectAllExpiry(idx, select) {
-  state.gex[idx].selectedDates = select ? [...state.gex[idx].expirations] : [];
-  renderExpiryChips(idx, state.gex[idx].expirations, state.gex[idx].selectedDates);
+function selectAllExpiry(idx,sel){
+  state.gex[idx].selectedDates=sel?[...state.gex[idx].expirations]:[];
+  renderExpiryChips(idx,state.gex[idx].expirations,state.gex[idx].selectedDates);
 }
-
-function selectCurrentMonth(idx) {
-  const now = new Date();
-  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  state.gex[idx].selectedDates = state.gex[idx].expirations.filter(d => d.startsWith(thisMonth));
-  renderExpiryChips(idx, state.gex[idx].expirations, state.gex[idx].selectedDates);
+function selectCurrentMonth(idx){
+  const now=new Date();
+  const m=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  state.gex[idx].selectedDates=state.gex[idx].expirations.filter(d=>d.startsWith(m));
+  renderExpiryChips(idx,state.gex[idx].expirations,state.gex[idx].selectedDates);
 }
-
-async function applyExpiry(idx) {
-  const sym = document.getElementById(`gex-sym-${idx}`).value.trim().toUpperCase();
-  if (!sym || !state.gex[idx].data) return;
-  // 折叠选择器
+async function applyExpiry(idx){
+  const sym=document.getElementById(`gex-sym-${idx}`).value.trim().toUpperCase();
+  if(!sym||!state.gex[idx].data)return;
   document.getElementById(`expiry-content-${idx}`).classList.remove('open');
   document.getElementById(`expiry-chevron-${idx}`).classList.remove('open');
-  await fetchAndRenderGEX(idx, sym);
+  await fetchAndRenderGEX(idx,sym);
 }
 
 // ─── 末日观察 ─────────────────────────────────────────────────────────────────
 async function loadDoomsday() {
   const sym = document.getElementById('doom-sym').value.trim().toUpperCase();
-  if (!sym) return alert('请输入标的代码');
-
-  setLoading('loading-doom-1', true);
-  setLoading('loading-doom-2', true);
-  setLoading('loading-doom-3', true);
-
+  if(!sym)return showError('请输入标的代码');
+  ['1','2','3'].forEach(n=>setLoading(`loading-doom-${n}`,true,'加载中...'));
   try {
-    const [doomData, ivHistory] = await Promise.all([
+    const [doomData, ivData] = await Promise.all([
       apiFetch(`/api/doomsday?symbol=${sym}`),
-      apiFetch(`/api/iv-history?symbol=${sym}`),
+      apiFetch(`/api/iv-history?symbol=${sym}&doom=1`),
     ]);
-
     state.doom.data = doomData;
-    state.doom.ivHistory = ivHistory.history;
+    state.doom.ivHistory = ivData.history;
 
-    // 更新指标
-    document.getElementById('doom-exp-date').textContent = doomData.expirationDate || '--';
-    document.getElementById('doom-spot').textContent = fmtPrice(doomData.spotPrice);
-    document.getElementById('doom-callwall').textContent = fmtPrice(doomData.callWall);
-    document.getElementById('doom-putwall').textContent = fmtPrice(doomData.putWall);
-    document.getElementById('doom-flip').textContent = fmtPrice(doomData.gammaFlip);
-    document.getElementById('doom-maxgex').textContent = doomData.maxGex ? fmtPrice(doomData.maxGex.strike) : '--';
+    document.getElementById('doom-exp-date').textContent = doomData.expirationDate||'--';
+    document.getElementById('doom-spot').textContent = fmt2(doomData.spotPrice);
+    document.getElementById('doom-callwall').textContent = fmt2(doomData.callWall);
+    document.getElementById('doom-putwall').textContent = fmt2(doomData.putWall);
+    document.getElementById('doom-flip').textContent = fmt2(doomData.gammaFlip);
+    document.getElementById('doom-atmiv').textContent = fmtIV(doomData.atmIV);
     document.getElementById('doom-update').textContent = doomData.updatedAt;
 
-    // 默认选中 Call Wall 和 Put Wall
     state.doom.selectedStrikes = new Set();
-    if (doomData.callWall) state.doom.selectedStrikes.add(`call:${doomData.callWall}`);
-    if (doomData.putWall) state.doom.selectedStrikes.add(`put:${doomData.putWall}`);
+    if(doomData.callWall) state.doom.selectedStrikes.add(`call:${doomData.callWall}`);
+    if(doomData.putWall)  state.doom.selectedStrikes.add(`put:${doomData.putWall}`);
 
     renderIVStrikeTags(doomData);
     renderDoomCharts(doomData);
-    updateSqueezePanel(doomData, ivHistory.history);
-
-  } catch (e) {
-    alert(`加载失败: ${e.message}`);
+    updateSqueezePanel(doomData, ivData.history);
+  } catch(e) {
+    showError(e.message);
   } finally {
-    setLoading('loading-doom-1', false);
-    setLoading('loading-doom-2', false);
-    setLoading('loading-doom-3', false);
+    ['1','2','3'].forEach(n=>setLoading(`loading-doom-${n}`,false));
   }
+}
+
+// ─── 末日图表 ────────────────────────────────────────────────────────────────
+function getFilteredStrikes(data) {
+  const spot = data.spotPrice;
+  const range = state.doom.zoomRange;
+  if(range>0&&spot) return data.strikes.filter(s=>Math.abs(s.strike-spot)<=range);
+  return data.strikes;
 }
 
 function renderDoomCharts(data) {
-  renderDoom1(data);
-  renderDoom2(data);
+  const filtered = getFilteredStrikes(data);
+  // 共享labels确保单元①②X轴完全对齐
+  state.doom.sharedLabels = filtered.map(s=>String(s.strike));
+  renderDoom1(data, filtered);
+  renderDoom2(data, filtered);
   renderDoom3(state.doom.ivHistory, data);
 }
 
-// 单元①：0DTE GEX分布
-function renderDoom1(data) {
+// 单元①
+function renderDoom1(data, filtered) {
   const canvas = document.getElementById('chart-doom-1');
-  if (state.doom.charts.c1) state.doom.charts.c1.destroy();
+  if(state.doom.charts.c1){state.doom.charts.c1.destroy();state.doom.charts.c1=null;}
 
-  let filtered = data.strikes;
-  if (state.doom.zoomRange > 0 && data.spotPrice) {
-    filtered = data.strikes.filter(s => Math.abs(s.strike - data.spotPrice) <= state.doom.zoomRange);
-  }
-
-  const labels = filtered.map(s => s.strike);
-  const callGex = filtered.map(s => s.callGex / 1e6);
-  const putGex = filtered.map(s => s.putGex / 1e6);
-
-  // 聚合GEX曲线
+  const labels = state.doom.sharedLabels;
+  const callGex = filtered.map(s=>s.callGex/1e6);
+  const putGex  = filtered.map(s=>s.putGex/1e6);
   const aggMap = {};
-  data.strikes.forEach((s, i) => { aggMap[s.strike] = data.aggregateGex[i] / 1e9; });
-  const aggValues = filtered.map(s => aggMap[s.strike] || 0);
+  data.strikes.forEach((s,i)=>{aggMap[s.strike]=data.aggregateGex[i]/1e9;});
+  const aggValues = filtered.map(s=>aggMap[s.strike]??0);
+
+  const spot = data.spotPrice;
+  const spotLabel     = nearestStrikeLabel(labels, spot);
+  const flipLabel     = nearestStrikeLabel(labels, data.gammaFlip);
+  const callWallLabel = nearestStrikeLabel(labels, data.callWall);
+  const putWallLabel  = nearestStrikeLabel(labels, data.putWall);
 
   const annotations = {};
+  if(flipLabel) annotations.flip={type:'line',xMin:flipLabel,xMax:flipLabel,borderColor:'#ff4757',borderWidth:1.5,borderDash:[5,4],label:{display:true,content:`Flip ${fmt2(data.gammaFlip)}`,position:'start',color:'#ff4757',backgroundColor:'rgba(8,11,15,0.8)',font:{size:10}}};
+  if(spotLabel) annotations.spot={type:'line',xMin:spotLabel,xMax:spotLabel,borderColor:'#00d084',borderWidth:2,label:{display:true,content:fmt2(spot),position:'start',color:'#00d084',backgroundColor:'rgba(8,11,15,0.8)',font:{size:10,weight:'bold'}}};
+  if(callWallLabel) annotations.callWall={type:'line',xMin:callWallLabel,xMax:callWallLabel,borderColor:'#00d08470',borderWidth:1,borderDash:[4,3],label:{display:true,content:`CW ${data.callWall}`,position:'end',color:'#00d084',backgroundColor:'rgba(8,11,15,0.8)',font:{size:9}}};
+  if(putWallLabel)  annotations.putWall ={type:'line',xMin:putWallLabel, xMax:putWallLabel, borderColor:'#ff475770',borderWidth:1,borderDash:[4,3],label:{display:true,content:`PW ${data.putWall}`, position:'end',color:'#ff4757',backgroundColor:'rgba(8,11,15,0.8)',font:{size:9}}};
 
-  if (data.gammaFlip) {
-    annotations.flip = {
-      type: 'line', xMin: data.gammaFlip, xMax: data.gammaFlip,
-      borderColor: '#ff4757', borderWidth: 1.5, borderDash: [4, 4],
-      label: { display: true, content: `Flip ${fmtPrice(data.gammaFlip)}`, position: 'start',
-               color: '#ff4757', backgroundColor: 'transparent', font: { size: 10 } }
-    };
-  }
-
-  if (data.spotPrice) {
-    annotations.spot = {
-      type: 'line', xMin: data.spotPrice, xMax: data.spotPrice,
-      borderColor: '#00d084', borderWidth: 2,
-      label: { display: true, content: fmtPrice(data.spotPrice), position: 'start',
-               color: '#00d084', backgroundColor: 'transparent', font: { size: 10, weight: 'bold' } }
-    };
-  }
-
-  // Max GEX 虚线
-  if (data.maxGex?.strike) {
-    annotations.maxGex = {
-      type: 'line',
-      yMin: data.maxGex.value / 1e6, yMax: data.maxGex.value / 1e6,
-      borderColor: '#ffd32a', borderWidth: 1, borderDash: [5, 3],
-      label: { display: true, content: `MaxGEX @ ${data.maxGex.strike}`, position: 'end',
-               color: '#ffd32a', backgroundColor: 'transparent', font: { size: 9 } }
-    };
-  }
-
-  // Min GEX 虚线
-  if (data.minGex?.strike) {
-    annotations.minGex = {
-      type: 'line',
-      yMin: data.minGex.value / 1e6, yMax: data.minGex.value / 1e6,
-      borderColor: '#a55eea', borderWidth: 1, borderDash: [5, 3],
-      label: { display: true, content: `MinGEX @ ${data.minGex.strike}`, position: 'end',
-               color: '#a55eea', backgroundColor: 'transparent', font: { size: 9 } }
-    };
-  }
-
-  if (data.callWall) {
-    annotations.callWall = {
-      type: 'line', xMin: data.callWall, xMax: data.callWall,
-      borderColor: '#00d08480', borderWidth: 1, borderDash: [3, 3],
-      label: { display: true, content: `CW ${data.callWall}`, position: 'end',
-               color: '#00d084', backgroundColor: 'transparent', font: { size: 9 } }
-    };
-  }
-
-  if (data.putWall) {
-    annotations.putWall = {
-      type: 'line', xMin: data.putWall, xMax: data.putWall,
-      borderColor: '#ff475780', borderWidth: 1, borderDash: [3, 3],
-      label: { display: true, content: `PW ${data.putWall}`, position: 'end',
-               color: '#ff4757', backgroundColor: 'transparent', font: { size: 9 } }
-    };
-  }
+  // MaxGEX 水平虚线
+  if(data.maxGex?.value!=null) annotations.maxGex={type:'line',yMin:data.maxGex.value/1e6,yMax:data.maxGex.value/1e6,borderColor:'#ffd32a',borderWidth:1,borderDash:[6,3],label:{display:true,content:`MaxGEX@${data.maxGex.strike}`,position:'end',color:'#ffd32a',backgroundColor:'rgba(8,11,15,0.8)',font:{size:9}}};
+  if(data.minGex?.value!=null) annotations.minGex={type:'line',yMin:data.minGex.value/1e6,yMax:data.minGex.value/1e6,borderColor:'#a55eea',borderWidth:1,borderDash:[6,3],label:{display:true,content:`MinGEX@${data.minGex.strike}`,position:'end',color:'#a55eea',backgroundColor:'rgba(8,11,15,0.8)',font:{size:9}}};
 
   state.doom.charts.c1 = new Chart(canvas, {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        { label: 'Call GEX (M)', data: callGex, backgroundColor: '#00d08460', borderColor: '#00d084', borderWidth: 1, yAxisID: 'y' },
-        { label: 'Put GEX (M)', data: putGex, backgroundColor: '#ff475760', borderColor: '#ff4757', borderWidth: 1, yAxisID: 'y' },
-        { label: '聚合 GEX (B)', data: aggValues, type: 'line', yAxisID: 'y2', borderColor: '#1e90ff', borderWidth: 2, pointRadius: 0, tension: 0.4, fill: false },
-      ]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { labels: { boxWidth: 12, padding: 16 } }, annotation: { annotations } },
-      scales: {
-        x: { type: 'category', grid: { color: '#1e2d4240' }, ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 20 } },
-        y: { position: 'left', grid: { color: '#1e2d4240' }, title: { display: true, text: 'GEX (M)', color: '#4a5a6a' } },
-        y2: { position: 'right', grid: { display: false }, title: { display: true, text: '聚合 GEX (B)', color: '#1e90ff60' }, ticks: { color: '#1e90ff80' } },
+    type:'bar',
+    data:{labels,datasets:[
+      {label:'Call GEX (M)',data:callGex,backgroundColor:'#00d08450',borderColor:'#00d084',borderWidth:1,yAxisID:'y'},
+      {label:'Put GEX (M)', data:putGex, backgroundColor:'#ff475750',borderColor:'#ff4757',borderWidth:1,yAxisID:'y'},
+      {label:'聚合 GEX (B)',data:aggValues,type:'line',yAxisID:'y2',borderColor:'#1e90ff',borderWidth:2,pointRadius:0,tension:0.4,fill:false},
+    ]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{labels:{boxWidth:12,padding:16}},annotation:{annotations}},
+      scales:{
+        x:{type:'category',grid:{color:'#1e2d4220'},ticks:{maxRotation:45,autoSkip:true,maxTicksLimit:24}},
+        y:{position:'left',grid:{color:'#1e2d4220'},title:{display:true,text:'GEX (M)',color:'#4a5a6a'}},
+        y2:{position:'right',grid:{display:false},title:{display:true,text:'聚合 GEX (B)',color:'#1e90ff50'},ticks:{color:'#1e90ff80'}}
       }
     }
   });
 }
 
-// 单元②：Vol/OI 比率图
-function renderDoom2(data) {
+// 单元②：Vol/OI — 与单元①共享labels
+function renderDoom2(data, filtered) {
   const canvas = document.getElementById('chart-doom-2');
-  if (state.doom.charts.c2) state.doom.charts.c2.destroy();
+  if(state.doom.charts.c2){state.doom.charts.c2.destroy();state.doom.charts.c2=null;}
 
-  let filtered = data.strikes;
-  if (state.doom.zoomRange > 0 && data.spotPrice) {
-    filtered = data.strikes.filter(s => Math.abs(s.strike - data.spotPrice) <= state.doom.zoomRange);
-  }
+  const labels = state.doom.sharedLabels; // ← 与单元①完全相同的labels
 
-  const labels = filtered.map(s => s.strike);
-  const callRatios = filtered.map(s => s.callOI > 0 ? Math.min(s.callVol / s.callOI, 5) : 0);
-  const putRatios = filtered.map(s => s.putOI > 0 ? Math.min(s.putVol / s.putOI, 5) : 0);
+  const maxVOI = Math.max(...filtered.map(s=>Math.max(s.callVol/(s.callOI||1), s.putVol/(s.putOI||1))), 0.01);
 
-  // 热力图色彩：Vol/OI越高越亮
-  const maxRatio = Math.max(...callRatios, ...putRatios, 1);
-  const callColors = callRatios.map(r => {
-    const intensity = r / maxRatio;
-    return `rgba(0, ${Math.floor(208 * intensity + 50), 0}, ${Math.floor(132 * intensity)}, ${0.3 + intensity * 0.7})`;
-  });
+  const callRatios = filtered.map(s=>s.callOI>0?Math.min(s.callVol/s.callOI,10):0);
+  const putRatios  = filtered.map(s=>s.putOI>0?Math.min(s.putVol/s.putOI,10):0);
 
+  const callColors = callRatios.map(r=>{const i=Math.min(r/maxVOI,1);return `rgba(0,208,132,${0.15+i*0.85})`;});
+  const putColors  = putRatios.map(r=>{const i=Math.min(r/maxVOI,1);return `rgba(255,71,87,${0.15+i*0.85})`;});
+
+  const spot = data.spotPrice;
+  const spotLabel = nearestStrikeLabel(labels, spot);
   const annotations = {};
-  if (data.spotPrice) {
-    annotations.spot = {
-      type: 'line', xMin: data.spotPrice, xMax: data.spotPrice,
-      borderColor: '#00d08480', borderWidth: 1, borderDash: [3, 3],
-    };
-  }
+  if(spotLabel) annotations.spot={type:'line',xMin:spotLabel,xMax:spotLabel,borderColor:'#00d08480',borderWidth:1,borderDash:[3,3]};
 
   state.doom.charts.c2 = new Chart(canvas, {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'Call Vol/OI',
-          data: callRatios,
-          backgroundColor: filtered.map(s => {
-            const r = s.callOI > 0 ? s.callVol / s.callOI : 0;
-            const i = Math.min(r / maxRatio, 1);
-            return `rgba(0, 208, 132, ${0.2 + i * 0.8})`;
-          }),
-          borderWidth: 0,
-        },
-        {
-          label: 'Put Vol/OI',
-          data: putRatios.map(v => -v),
-          backgroundColor: filtered.map(s => {
-            const r = s.putOI > 0 ? s.putVol / s.putOI : 0;
-            const i = Math.min(r / maxRatio, 1);
-            return `rgba(255, 71, 87, ${0.2 + i * 0.8})`;
-          }),
-          borderWidth: 0,
-        },
-      ]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { labels: { boxWidth: 12, padding: 16 } },
-        annotation: { annotations },
-        tooltip: {
-          callbacks: {
-            label: ctx => {
-              const abs = Math.abs(ctx.raw);
-              return `${ctx.dataset.label}: ${abs.toFixed(2)}`;
-            }
-          }
-        }
+    type:'bar',
+    data:{labels,datasets:[
+      {label:'Call Vol/OI',data:callRatios,backgroundColor:callColors,borderWidth:0},
+      {label:'Put Vol/OI', data:putRatios.map(v=>-v),backgroundColor:putColors,borderWidth:0},
+    ]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{boxWidth:12,padding:16}},
+        annotation:{annotations},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${Math.abs(ctx.raw).toFixed(2)}`}}
       },
-      scales: {
-        x: { type: 'category', grid: { color: '#1e2d4240' }, ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 20 } },
-        y: {
-          grid: { color: '#1e2d4240' },
-          title: { display: true, text: 'Vol/OI', color: '#4a5a6a' },
-          ticks: { callback: v => Math.abs(v).toFixed(1) }
-        },
+      scales:{
+        x:{type:'category',grid:{color:'#1e2d4220'},ticks:{maxRotation:45,autoSkip:true,maxTicksLimit:24}},
+        y:{grid:{color:'#1e2d4220'},title:{display:true,text:'Vol/OI',color:'#4a5a6a'},ticks:{callback:v=>Math.abs(v).toFixed(1)}}
       }
     }
   });
 }
 
-// 单元③：日内IV变化曲线
+// 单元③：日内IV曲线
 function renderDoom3(ivHistory, data) {
   const canvas = document.getElementById('chart-doom-3');
-  if (state.doom.charts.c3) state.doom.charts.c3.destroy();
+  if(state.doom.charts.c3){state.doom.charts.c3.destroy();state.doom.charts.c3=null;}
 
-  if (!ivHistory || ivHistory.length < 2) {
+  // 过滤掉无效IV记录
+  const validHistory = (ivHistory||[]).filter(h=>h.atmIV!=null&&h.atmIV>0);
+
+  if(validHistory.length < 1) {
     setLoading('loading-doom-3', false);
+    // 显示空图提示
+    state.doom.charts.c3 = new Chart(canvas, {
+      type:'line',data:{labels:['--'],datasets:[{label:'等待数据积累（每15分钟记录一次）',data:[null],borderColor:'#4a5a6a',borderWidth:1}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{boxWidth:12}}},scales:{x:{},y:{title:{display:true,text:'IV (%)'}}}}
+    });
     return;
   }
 
-  const labels = ivHistory.map(h => {
-    const t = new Date(h.timestamp);
-    return t.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' });
+  const labels = validHistory.map(h=>{
+    const t=new Date(h.timestamp);
+    return t.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'});
   });
 
   const datasets = [];
 
   // ATM IV
   datasets.push({
-    label: `ATM IV`,
-    data: ivHistory.map(h => h.atmIV),
-    borderColor: '#1e90ff',
-    borderWidth: 2,
-    pointRadius: 2,
-    tension: 0.3,
-    fill: false,
+    label:'ATM IV',
+    data:validHistory.map(h=>h.atmIV),
+    borderColor:'#1e90ff',borderWidth:2,pointRadius:3,tension:0.3,fill:false,
   });
 
   // Call Wall IV
-  if (state.doom.selectedStrikes.has(`call:${data?.callWall}`)) {
-    datasets.push({
-      label: `Call Wall ${data.callWall} IV`,
-      data: ivHistory.map(h => h.callWallIV),
-      borderColor: '#00d084',
-      borderWidth: 2,
-      pointRadius: 2,
-      tension: 0.3,
-      fill: false,
-      borderDash: [4, 2],
-    });
+  if(data&&state.doom.selectedStrikes.has(`call:${data.callWall}`)) {
+    const cwData = validHistory.map(h=>h.callWallIV);
+    if(cwData.some(v=>v!=null&&v>0)) {
+      datasets.push({
+        label:`Call Wall ${data.callWall} IV`,
+        data:cwData,borderColor:'#00d084',borderWidth:2,
+        pointRadius:3,tension:0.3,fill:false,borderDash:[5,3],
+      });
+    }
   }
 
   // Put Wall IV
-  if (state.doom.selectedStrikes.has(`put:${data?.putWall}`)) {
-    datasets.push({
-      label: `Put Wall ${data.putWall} IV`,
-      data: ivHistory.map(h => h.putWallIV),
-      borderColor: '#ff4757',
-      borderWidth: 2,
-      pointRadius: 2,
-      tension: 0.3,
-      fill: false,
-      borderDash: [4, 2],
-    });
+  if(data&&state.doom.selectedStrikes.has(`put:${data.putWall}`)) {
+    const pwData = validHistory.map(h=>h.putWallIV);
+    if(pwData.some(v=>v!=null&&v>0)) {
+      datasets.push({
+        label:`Put Wall ${data.putWall} IV`,
+        data:pwData,borderColor:'#ff4757',borderWidth:2,
+        pointRadius:3,tension:0.3,fill:false,borderDash:[5,3],
+      });
+    }
   }
 
   state.doom.charts.c3 = new Chart(canvas, {
-    type: 'line',
-    data: { labels, datasets },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { labels: { boxWidth: 12, padding: 16 } },
-        tooltip: {
-          callbacks: {
-            label: ctx => `${ctx.dataset.label}: ${ctx.raw?.toFixed(2) || '--'}%`
-          }
-        }
+    type:'line',
+    data:{labels,datasets},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{boxWidth:12,padding:16}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.raw!=null?ctx.raw.toFixed(2):'--'}%`}}
       },
-      scales: {
-        x: { grid: { color: '#1e2d4240' } },
-        y: { grid: { color: '#1e2d4240' }, title: { display: true, text: 'IV (%)', color: '#4a5a6a' } },
+      scales:{
+        x:{grid:{color:'#1e2d4220'}},
+        y:{grid:{color:'#1e2d4220'},title:{display:true,text:'IV (%)',color:'#4a5a6a'},
+           ticks:{callback:v=>v.toFixed(1)+'%'}}
       }
     }
   });
 }
 
-// ─── Gamma Squeeze 判断 ───────────────────────────────────────────────────────
-/**
- * Gamma Squeeze 判断逻辑：
- *
- * 看涨挤压（上方）：
- *   ① 现价距Call Wall ≤ 1%（接近压力位）
- *   ② Call Wall的IV在最近3个数据点持续上升（市场预期波动率上升）
- *   ③ Call Wall的Vol/OI比率 > 0.3（该行权价成交活跃）
- *   → 三条件同时满足：高风险挤压，做市商需大量买入对冲，可能引发加速上涨
- *
- * 看跌挤压（下方）：
- *   ① 现价距Put Wall ≤ 1%
- *   ② Put Wall的IV持续上升
- *   ③ Put Wall的Vol/OI比率 > 0.3
- *   → 三条件同时满足：做市商卖出对冲，可能加速下跌
- */
-function updateSqueezePanel(data, ivHistory) {
-  const spot = data.spotPrice;
-  const callWall = data.callWall;
-  const putWall = data.putWall;
-
-  // ── 看涨挤压 ──
-  const upEl = document.getElementById('squeeze-up-signal');
-  const upDetailEl = document.getElementById('squeeze-up-detail');
-  if (callWall && spot) {
-    const distPct = Math.abs((callWall - spot) / spot * 100);
-    const callWallStrike = data.strikes.find(s => s.strike === callWall);
-    const voiRatio = callWallStrike ? callWallStrike.volOIRatio : 0;
-
-    // IV趋势
-    let ivTrend = false;
-    if (ivHistory && ivHistory.length >= 3) {
-      const recent = ivHistory.slice(-3).map(h => h.callWallIV);
-      ivTrend = recent[0] < recent[1] && recent[1] < recent[2];
-    }
-
-    const cond1 = distPct <= 1;
-    const cond2 = ivTrend;
-    const cond3 = voiRatio > 0.3;
-    const score = [cond1, cond2, cond3].filter(Boolean).length;
-
-    const signals = {
-      3: { text: '🔴 高风险 — 三条件满足，挤压风险极高', cls: 'red' },
-      2: { text: '🟡 中等风险 — 两条件满足，保持警惕', cls: 'yellow' },
-      1: { text: '⚪ 低风险 — 仅一条件满足', cls: '' },
-      0: { text: '🟢 无信号 — 条件未触发', cls: '' },
-    };
-    const sig = signals[score];
-    upEl.textContent = sig.text;
-    upEl.className = `squeeze-signal ${sig.cls === 'red' ? 'red' : sig.cls === 'yellow' ? 'yellow' : ''}`;
-    upEl.style.color = sig.cls === 'red' ? 'var(--red)' : sig.cls === 'yellow' ? 'var(--yellow)' : 'var(--text-secondary)';
-
-    upDetailEl.innerHTML = `
-      ① 距Call Wall ${fmtPrice(callWall)}：${distPct.toFixed(2)}%（阈值≤1%）${cond1 ? ' ✓' : ' ✗'}<br>
-      ② Call Wall IV趋势：${ivTrend ? '持续上升 ✓' : '未上升 ✗'}<br>
-      ③ Vol/OI：${voiRatio.toFixed(2)}（阈值>0.3）${cond3 ? ' ✓' : ' ✗'}
-    `;
-  }
-
-  // ── 看跌挤压 ──
-  const downEl = document.getElementById('squeeze-down-signal');
-  const downDetailEl = document.getElementById('squeeze-down-detail');
-  if (putWall && spot) {
-    const distPct = Math.abs((spot - putWall) / spot * 100);
-    const putWallStrike = data.strikes.find(s => s.strike === putWall);
-    const voiRatio = putWallStrike ? putWallStrike.volOIRatio : 0;
-
-    let ivTrend = false;
-    if (ivHistory && ivHistory.length >= 3) {
-      const recent = ivHistory.slice(-3).map(h => h.putWallIV);
-      ivTrend = recent[0] < recent[1] && recent[1] < recent[2];
-    }
-
-    const cond1 = distPct <= 1;
-    const cond2 = ivTrend;
-    const cond3 = voiRatio > 0.3;
-    const score = [cond1, cond2, cond3].filter(Boolean).length;
-
-    const signals = {
-      3: { text: '🔴 高风险 — 三条件满足，下行挤压风险极高' },
-      2: { text: '🟡 中等风险 — 两条件满足，保持警惕' },
-      1: { text: '⚪ 低风险 — 仅一条件满足' },
-      0: { text: '🟢 无信号 — 条件未触发' },
-    };
-    downEl.textContent = signals[score].text;
-    downEl.style.color = score === 3 ? 'var(--red)' : score === 2 ? 'var(--yellow)' : 'var(--text-secondary)';
-
-    downDetailEl.innerHTML = `
-      ① 距Put Wall ${fmtPrice(putWall)}：${distPct.toFixed(2)}%（阈值≤1%）${cond1 ? ' ✓' : ' ✗'}<br>
-      ② Put Wall IV趋势：${ivTrend ? '持续上升 ✓' : '未上升 ✗'}<br>
-      ③ Vol/OI：${voiRatio.toFixed(2)}（阈值>0.3）${cond3 ? ' ✓' : ' ✗'}
-    `;
-  }
-}
-
-// ─── IV 行权价标签 ────────────────────────────────────────────────────────────
+// ─── IV 标签 ─────────────────────────────────────────────────────────────────
 function renderIVStrikeTags(data) {
   const container = document.getElementById('iv-strike-tags');
-  container.innerHTML = '';
-
-  const addTag = (key, label, type) => {
-    const tag = document.createElement('div');
-    tag.className = `iv-strike-tag ${state.doom.selectedStrikes.has(key) ? `selected-${type}` : ''}`;
-    tag.textContent = label;
-    tag.onclick = () => {
-      if (state.doom.selectedStrikes.has(key)) {
-        state.doom.selectedStrikes.delete(key);
-        tag.className = 'iv-strike-tag';
-      } else {
-        state.doom.selectedStrikes.add(key);
-        tag.className = `iv-strike-tag selected-${type}`;
-      }
+  container.innerHTML='';
+  const addTag=(key,label,type)=>{
+    const tag=document.createElement('div');
+    tag.className=`iv-strike-tag${state.doom.selectedStrikes.has(key)?' sel-'+type:''}`;
+    tag.textContent=label;
+    tag.onclick=()=>{
+      if(state.doom.selectedStrikes.has(key)){state.doom.selectedStrikes.delete(key);tag.className='iv-strike-tag';}
+      else{state.doom.selectedStrikes.add(key);tag.className=`iv-strike-tag sel-${type}`;}
       renderDoom3(state.doom.ivHistory, data);
     };
     container.appendChild(tag);
   };
-
-  if (data.callWall) addTag(`call:${data.callWall}`, `📈 Call Wall ${data.callWall}`, 'call');
-  if (data.putWall) addTag(`put:${data.putWall}`, `📉 Put Wall ${data.putWall}`, 'put');
-
-  // 自定义行权价标签
-  state.doom.customStrikes.forEach(strike => {
-    addTag(`custom:${strike}`, `★ ${strike}`, 'call');
-  });
+  if(data.callWall) addTag(`call:${data.callWall}`,`📈 Call Wall ${data.callWall}`,'call');
+  if(data.putWall)  addTag(`put:${data.putWall}`, `📉 Put Wall ${data.putWall}`, 'put');
+  state.doom.customStrikes.forEach(s=>addTag(`custom:${s}`,`★ ${s}`,'call'));
 }
 
 function addCustomIVStrike() {
   const val = parseFloat(document.getElementById('iv-custom-strike').value);
-  if (isNaN(val)) return alert('请输入有效的行权价');
+  if(isNaN(val))return showError('请输入有效的行权价');
   state.doom.customStrikes.add(val);
   state.doom.selectedStrikes.add(`custom:${val}`);
-  if (state.doom.data) {
-    renderIVStrikeTags(state.doom.data);
-    renderDoom3(state.doom.ivHistory, state.doom.data);
-  }
+  if(state.doom.data){renderIVStrikeTags(state.doom.data);renderDoom3(state.doom.ivHistory,state.doom.data);}
 }
 
-// ─── Loading 状态 ─────────────────────────────────────────────────────────────
-function setLoading(id, loading) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  if (loading) {
-    el.classList.remove('hidden');
-    el.querySelector('.loading-text').textContent = '加载中...';
-  } else {
-    el.classList.add('hidden');
+// ─── Gamma Squeeze 判断 ───────────────────────────────────────────────────────
+function updateSqueezePanel(data, ivHistory) {
+  const spot=data.spotPrice, callWall=data.callWall, putWall=data.putWall;
+  const valid=(ivHistory||[]).filter(h=>h.atmIV!=null&&h.atmIV>0);
+
+  // 看涨挤压
+  const upEl=document.getElementById('squeeze-up-signal');
+  const upDet=document.getElementById('squeeze-up-detail');
+  if(callWall&&spot){
+    const dist=Math.abs((callWall-spot)/spot*100);
+    const cws=data.strikes.find(s=>s.strike===callWall);
+    const voi=cws?cws.volOIRatio:0;
+    let ivUp=false;
+    if(valid.length>=3){const r=valid.slice(-3).map(h=>h.callWallIV||0);ivUp=r[0]<r[1]&&r[1]<r[2]&&r[2]>0;}
+    const score=[dist<=1,ivUp,voi>0.3].filter(Boolean).length;
+    const colors={3:'var(--red)',2:'var(--yellow)',1:'var(--text-secondary)',0:'var(--green)'};
+    const texts={3:'🔴 高风险 — 三条件满足，Gamma挤压风险极高',2:'🟡 中等 — 两条件满足，保持警惕',1:'⚪ 低风险 — 仅一条件满足',0:'🟢 无信号'};
+    upEl.textContent=texts[score]; upEl.style.color=colors[score];
+    upDet.innerHTML=`① 距Call Wall ${callWall}：${dist.toFixed(2)}%（≤1%触发）${dist<=1?'✓':'✗'}<br>② Call Wall IV连续上升：${ivUp?'是 ✓':'否 ✗'}（需≥3条历史数据）<br>③ Call Wall Vol/OI：${voi.toFixed(2)}（>0.3触发）${voi>0.3?'✓':'✗'}`;
+  }
+
+  // 看跌挤压
+  const downEl=document.getElementById('squeeze-down-signal');
+  const downDet=document.getElementById('squeeze-down-detail');
+  if(putWall&&spot){
+    const dist=Math.abs((spot-putWall)/spot*100);
+    const pws=data.strikes.find(s=>s.strike===putWall);
+    const voi=pws?pws.volOIRatio:0;
+    let ivUp=false;
+    if(valid.length>=3){const r=valid.slice(-3).map(h=>h.putWallIV||0);ivUp=r[0]<r[1]&&r[1]<r[2]&&r[2]>0;}
+    const score=[dist<=1,ivUp,voi>0.3].filter(Boolean).length;
+    const colors={3:'var(--red)',2:'var(--yellow)',1:'var(--text-secondary)',0:'var(--green)'};
+    const texts={3:'🔴 高风险 — 三条件满足，下行挤压风险极高',2:'🟡 中等 — 两条件满足，保持警惕',1:'⚪ 低风险',0:'🟢 无信号'};
+    downEl.textContent=texts[score]; downEl.style.color=colors[score];
+    downDet.innerHTML=`① 距Put Wall ${putWall}：${dist.toFixed(2)}%（≤1%触发）${dist<=1?'✓':'✗'}<br>② Put Wall IV连续上升：${ivUp?'是 ✓':'否 ✗'}（需≥3条历史数据）<br>③ Put Wall Vol/OI：${voi.toFixed(2)}（>0.3触发）${voi>0.3?'✓':'✗'}`;
   }
 }
 
 // ─── 自动刷新 ─────────────────────────────────────────────────────────────────
-function startAutoRefresh() {
-  if (refreshTimer) clearInterval(refreshTimer);
-  refreshTimer = setInterval(async () => {
-    const now = new Date();
-    const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-    const day = et.getDay();
-    const h = et.getHours(), m = et.getMinutes();
-    const mins = h * 60 + m;
-    const isMarket = day >= 1 && day <= 5 && mins >= 8 * 60 + 30 && mins < 16 * 60;
-
-    if (!isMarket) return;
-
-    // 刷新GEX面板
-    for (const idx of [1, 2]) {
-      const sym = document.getElementById(`gex-sym-${idx}`).value.trim().toUpperCase();
-      if (sym && state.gex[idx].data) {
-        fetchAndRenderGEX(idx, sym).catch(console.error);
-      }
-    }
-
-    // 刷新末日面板
-    const doomSym = document.getElementById('doom-sym').value.trim().toUpperCase();
-    if (doomSym && state.doom.data) {
-      loadDoomsday().catch(console.error);
-    }
-  }, 15 * 60 * 1000); // 15分钟
-}
-
-// ─── 初始化 ───────────────────────────────────────────────────────────────────
-// 初始化显示空图表占位符
-function initEmptyState(canvasId, message) {
-  const canvas = document.getElementById(canvasId);
-  if (!canvas) return;
-  const loadingEl = document.getElementById('loading-' + canvasId.replace('chart-', ''));
-  if (loadingEl) {
-    loadingEl.querySelector('.loading-text').textContent = message;
+setInterval(async()=>{
+  const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+  const day=et.getDay(),mins=et.getHours()*60+et.getMinutes();
+  if(!(day>=1&&day<=5&&mins>=8*60+30&&mins<16*60))return;
+  for(const idx of [1,2]){
+    const sym=document.getElementById(`gex-sym-${idx}`).value.trim().toUpperCase();
+    if(sym&&state.gex[idx].data)fetchAndRenderGEX(idx,sym).catch(()=>{});
   }
-}
+  const ds=document.getElementById('doom-sym').value.trim().toUpperCase();
+  if(ds&&state.doom.data)loadDoomsday().catch(()=>{});
+}, 15*60*1000);
 
-document.addEventListener('DOMContentLoaded', () => {
-  // 让加载层显示"等待输入"
-  ['gex-1', 'gex-2'].forEach(id => {
-    const el = document.getElementById(`loading-${id}`);
-    if (el) el.querySelector('.loading-text').textContent = '请输入标的代码后点击加载';
-  });
-  ['doom-1', 'doom-2', 'doom-3'].forEach(id => {
-    const el = document.getElementById(`loading-doom-${id}`);
-    if (el) el.querySelector('.loading-text').textContent = '请在上方输入标的代码后加载';
-  });
-
-  startAutoRefresh();
-
-  // 回车快捷键
-  document.getElementById('gex-sym-1').addEventListener('keydown', e => { if (e.key === 'Enter') loadGEX(1); });
-  document.getElementById('gex-sym-2').addEventListener('keydown', e => { if (e.key === 'Enter') loadGEX(2); });
-  document.getElementById('doom-sym').addEventListener('keydown', e => { if (e.key === 'Enter') loadDoomsday(); });
+// 快捷键
+document.addEventListener('DOMContentLoaded',()=>{
+  document.getElementById('gex-sym-1').addEventListener('keydown',e=>{if(e.key==='Enter')loadGEX(1);});
+  document.getElementById('gex-sym-2').addEventListener('keydown',e=>{if(e.key==='Enter')loadGEX(2);});
+  document.getElementById('doom-sym').addEventListener('keydown',e=>{if(e.key==='Enter')loadDoomsday();});
 });
 </script>
 </body>
