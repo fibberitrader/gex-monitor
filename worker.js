@@ -1,473 +1,326 @@
 /**
- * GEX Monitor - Cloudflare Worker v2 (修复版)
+ * GEX Monitor - Cloudflare Worker v2
+ *
+ * 核心修正：
+ * 1. 每行权价只有一根净GEX柱（CallGEX正 + PutGEX负 = 净GEX）
+ * 2. 聚合GEX = 所有行权价净GEX从低到高累加
+ * 3. Gamma Flip = 聚合GEX曲线唯一穿越零轴点（线性插值）
+ * 4. Call Wall = 净GEX最大正值行权价
+ * 5. Put Wall  = 净GEX绝对值最大负值行权价
+ * 6. IV过滤：只取 0 < IV < 500 的有效值
+ * 7. 支持期货期权（/ES /GC等）
  */
 
-const CORS_HEADERS = {
+const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
   'Content-Type': 'application/json',
 };
 
-function jsonRes(data, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers: CORS_HEADERS });
-}
-function errRes(msg, status = 500) {
-  return new Response(JSON.stringify({ error: msg }), { status, headers: CORS_HEADERS });
-}
+const ok  = (d)    => new Response(JSON.stringify(d), { headers: CORS });
+const err = (m, s=500) => new Response(JSON.stringify({ error: m }), { status: s, headers: CORS });
 
-function getETTimeString() {
+function etNow() {
   return new Date().toLocaleString('zh-CN', {
-    timeZone: 'America/New_York',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false
+    timeZone: 'America/New_York', hour12: false,
+    year:'numeric',month:'2-digit',day:'2-digit',
+    hour:'2-digit',minute:'2-digit',second:'2-digit'
   }) + ' ET';
 }
 
-function isMarketHours() {
-  const now = new Date();
-  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const day = et.getDay();
-  if (day === 0 || day === 6) return false;
-  const mins = et.getHours() * 60 + et.getMinutes();
-  return mins >= 8 * 60 + 30 && mins <= 16 * 60;
+function isMarketOpen() {
+  const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const d = et.getDay(), m = et.getHours()*60 + et.getMinutes();
+  return d >= 1 && d <= 5 && m >= 510 && m <= 960; // 8:30-16:00
 }
 
-// ─── Schwab OAuth ─────────────────────────────────────────────────────────────
-async function getAccessToken(env) {
-  try {
-    const cached = await env.GEX_KV.get('access_token');
-    if (cached) {
-      const { token, expiry } = JSON.parse(cached);
-      if (Date.now() < expiry - 60000) return token;
-    }
-  } catch(e) {}
+const isFutures = s => s.startsWith('/');
 
-  const credentials = btoa(`${env.SCHWAB_APP_KEY}:${env.SCHWAB_SECRET}`);
+// ── Token ─────────────────────────────────────────────────────────────────────
+async function getToken(env) {
+  try {
+    const c = await env.GEX_KV.get('tok');
+    if (c) { const p = JSON.parse(c); if (Date.now() < p.exp - 60000) return p.tok; }
+  } catch(_){}
+
   const res = await fetch('https://api.schwabapi.com/v1/oauth/token', {
     method: 'POST',
     headers: {
-      'Authorization': `Basic ${credentials}`,
+      'Authorization': 'Basic ' + btoa(`${env.SCHWAB_APP_KEY}:${env.SCHWAB_SECRET}`),
       'Content-Type': 'application/x-www-form-urlencoded',
     },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: env.SCHWAB_REFRESH_TOKEN,
-    }),
+    body: new URLSearchParams({ grant_type:'refresh_token', refresh_token: env.SCHWAB_REFRESH_TOKEN }),
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Token refresh failed: ${res.status} - ${text}`);
-  }
-
-  const data = await res.json();
-  const tokenData = { token: data.access_token, expiry: Date.now() + data.expires_in * 1000 };
-  await env.GEX_KV.put('access_token', JSON.stringify(tokenData), { expirationTtl: data.expires_in - 60 });
-  return data.access_token;
+  if (!res.ok) throw new Error('Token: ' + res.status + ' ' + await res.text());
+  const d = await res.json();
+  await env.GEX_KV.put('tok', JSON.stringify({ tok: d.access_token, exp: Date.now() + d.expires_in*1000 }), { expirationTtl: d.expires_in - 60 });
+  return d.access_token;
 }
 
-// ─── Schwab Quote ─────────────────────────────────────────────────────────────
-async function fetchQuote(symbol, token) {
-  const url = `https://api.schwabapi.com/marketdata/v1/quotes?symbols=${encodeURIComponent(symbol)}&fields=quote`;
-  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-  if (!res.ok) throw new Error(`Quote fetch failed: ${res.status}`);
-  const data = await res.json();
-  const q = data[symbol]?.quote;
-  if (!q) throw new Error(`No quote for ${symbol}`);
-  return { symbol, last: q.lastPrice || q.mark || q.closePrice || 0 };
-}
-
-// ─── Schwab Option Chain ──────────────────────────────────────────────────────
-async function fetchOptionChain(symbol, token, fromDate, toDate) {
-  const params = new URLSearchParams({
-    symbol,
-    contractType: 'ALL',
-    includeUnderlyingQuote: 'true',
-    strategy: 'SINGLE',
-    optionType: 'ALL',
+// ── Quote ─────────────────────────────────────────────────────────────────────
+async function getQuote(symbol, token) {
+  const r = await fetch(`https://api.schwabapi.com/marketdata/v1/quotes?symbols=${encodeURIComponent(symbol)}&fields=quote`, {
+    headers: { Authorization: 'Bearer ' + token }
   });
-  if (fromDate) params.set('fromDate', fromDate);
-  if (toDate) params.set('toDate', toDate);
-
-  const url = `https://api.schwabapi.com/marketdata/v1/chains?${params}`;
-  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Chain fetch failed: ${res.status} - ${text}`);
-  }
-  const data = await res.json();
-  if (data.status === 'FAILED') throw new Error(`No option chain for ${symbol}. 期货期权请用对应ETF（如/ES→SPY，/GC→GLD）`);
-  return data;
+  if (!r.ok) throw new Error('Quote ' + r.status);
+  const d = await r.json();
+  const key = Object.keys(d)[0];
+  const q = d[key]?.quote;
+  if (!q) throw new Error('No quote for ' + symbol);
+  return q.lastPrice || q.mark || q.closePrice || 0;
 }
 
-// ─── IV 清洗 ──────────────────────────────────────────────────────────────────
-// Schwab 返回的 volatility 是百分比形式（如 45.74），异常值过滤
-function cleanIV(v) {
-  if (v == null || isNaN(v) || v < 0 || v > 500) return null;
-  return v;
+// ── Option Chain ──────────────────────────────────────────────────────────────
+async function getChain(symbol, token, fromDate, toDate) {
+  const p = new URLSearchParams({
+    symbol, contractType:'ALL', includeUnderlyingQuote:'true',
+    strategy:'SINGLE', optionType:'ALL',
+  });
+  if (fromDate) p.set('fromDate', fromDate);
+  if (toDate)   p.set('toDate', toDate);
+
+  const r = await fetch(`https://api.schwabapi.com/marketdata/v1/chains?${p}`, {
+    headers: { Authorization: 'Bearer ' + token }
+  });
+  if (!r.ok) throw new Error('Chain ' + r.status + ': ' + await r.text());
+  return r.json();
 }
 
-// ─── GEX 核心计算（修复版）────────────────────────────────────────────────────
-/**
- * 【重要修正】
- * Schwab API 的 gamma 字段：
- *   - Call 的 gamma 为正数
- *   - Put 的 gamma 为负数（已经是负的）
- * 
- * GEX = gamma × OI × 100 × spot² × 0.01
- * 
- * Call GEX > 0 → 做市商净多gamma（稳定器）
- * Put GEX < 0  → 做市商净空gamma（放大器）
- * 
- * 不需要手动给Put加负号，gamma本身符号已经正确！
- */
-function calculateGEX(chainData, spotPrice) {
-  // strike → { callGex, putGex, callOI, putOI, callVol, putVol, callIV, putIV }
-  const byStrike = {};
-  const expirationDates = [];
+// ── GEX 计算核心 ──────────────────────────────────────────────────────────────
+function calcGEX(chain, spot) {
+  if (!spot || spot <= 0) throw new Error('Invalid spot price');
 
-  const processMap = (optionMap, isCall) => {
-    if (!optionMap) return;
-    for (const [expDateStr, strikesObj] of Object.entries(optionMap)) {
-      const expDate = expDateStr.split(':')[0];
-      if (!expirationDates.includes(expDate)) expirationDates.push(expDate);
+  const map = {}; // strike -> accumulator
 
-      for (const [strikeStr, contracts] of Object.entries(strikesObj)) {
-        const strike = parseFloat(strikeStr);
-        const contract = Array.isArray(contracts) ? contracts[0] : contracts;
+  function validIV(v) { return typeof v === 'number' && v > 0 && v < 500; }
 
-        const gamma = contract.gamma ?? 0;       // Call: 正, Put: 负（Schwab已处理）
-        const oi    = contract.openInterest ?? 0;
-        const vol   = contract.totalVolume ?? 0;
-        const iv    = cleanIV(contract.volatility); // 百分比，如45.74
+  function process(expMap, isCall) {
+    if (!expMap) return;
+    for (const [expKey, strikes] of Object.entries(expMap)) {
+      for (const [kStr, contracts] of Object.entries(strikes)) {
+        const k = parseFloat(kStr);
+        const c = Array.isArray(contracts) ? contracts[0] : contracts;
+        if (!c) continue;
 
-        // GEX = gamma × OI × 100 × spot² × 0.01
-        // 对于LEAPS等deep OTM gamma接近0，不影响
-        const gex = gamma * oi * 100 * spotPrice * spotPrice * 0.01;
+        const gamma = typeof c.gamma === 'number' ? Math.abs(c.gamma) : 0;
+        const oi    = typeof c.openInterest === 'number' ? c.openInterest : 0;
+        const vol   = typeof c.totalVolume  === 'number' ? c.totalVolume  : 0;
+        const iv    = validIV(c.volatility) ? c.volatility : 0;
 
-        if (!byStrike[strike]) {
-          byStrike[strike] = { callGex: 0, putGex: 0, callOI: 0, putOI: 0, callVol: 0, putVol: 0, callIV: null, putIV: null };
-        }
+        // GEX 单位：美元
+        // 对做市商而言：卖出Call → 正GEX；卖出Put → 负GEX
+        const gex = gamma * oi * 100 * spot * spot * 0.01;
 
+        if (!map[k]) map[k] = { cGex:0, pGex:0, cOI:0, pOI:0, cVol:0, pVol:0, cIV:0, pIV:0, cIVn:0, pIVn:0 };
+        const m = map[k];
         if (isCall) {
-          byStrike[strike].callGex += gex;   // Call gamma > 0 → GEX > 0
-          byStrike[strike].callOI  += oi;
-          byStrike[strike].callVol += vol;
-          if (iv !== null) byStrike[strike].callIV = iv;
+          m.cGex += gex;   // 正
+          m.cOI  += oi; m.cVol += vol;
+          if (iv > 0) { m.cIV += iv; m.cIVn++; }
         } else {
-          byStrike[strike].putGex  += gex;   // Put gamma < 0 → GEX < 0（自然）
-          byStrike[strike].putOI   += oi;
-          byStrike[strike].putVol  += vol;
-          if (iv !== null) byStrike[strike].putIV = iv;
+          m.pGex -= gex;   // 负
+          m.pOI  += oi; m.pVol += vol;
+          if (iv > 0) { m.pIV += iv; m.pIVn++; }
         }
       }
     }
-  };
+  }
 
-  processMap(chainData.callExpDateMap, true);
-  processMap(chainData.putExpDateMap, false);
+  process(chain.callExpDateMap, true);
+  process(chain.putExpDateMap,  false);
 
-  const strikes = Object.keys(byStrike).map(Number).sort((a, b) => a - b);
-  if (!strikes.length) return null;
+  const sortedStrikes = Object.keys(map).map(Number).sort((a,b) => a-b);
+  if (!sortedStrikes.length) return { strikes:[], aggregateGex:[], gammaFlip:null, callWall:null, putWall:null, atmIV:0 };
 
-  // 计算每个行权价的净GEX
-  const strikeData = strikes.map(strike => {
-    const d = byStrike[strike];
-    const netGex = d.callGex + d.putGex;
-    const totalOI = d.callOI + d.putOI;
-    const totalVol = d.callVol + d.putVol;
+  // 构建 strikes 数组（每个行权价一个净GEX）
+  const strikes = sortedStrikes.map(k => {
+    const m = map[k];
+    const netGex = m.cGex + m.pGex; // 净GEX，正为绿柱，负为红柱
     return {
-      strike,
-      callGex: d.callGex,
-      putGex: d.putGex,
+      strike: k,
       netGex,
-      callOI: d.callOI,
-      putOI: d.putOI,
-      totalOI,
-      callVol: d.callVol,
-      putVol: d.putVol,
-      totalVol,
-      volOIRatio: totalOI > 0 ? Math.min(totalVol / totalOI, 10) : 0,
-      callIV: d.callIV,
-      putIV: d.putIV,
+      callGex: m.cGex,
+      putGex:  m.pGex,
+      callOI: m.cOI, putOI: m.pOI,
+      callVol: m.cVol, putVol: m.pVol,
+      totalOI: m.cOI + m.pOI,
+      totalVol: m.cVol + m.pVol,
+      volOIRatio: (m.cOI+m.pOI) > 0 ? (m.cVol+m.pVol)/(m.cOI+m.pOI) : 0,
+      callVolOI: m.cOI > 0 ? m.cVol/m.cOI : 0,
+      putVolOI:  m.pOI > 0 ? m.pVol/m.pOI : 0,
+      callIV: m.cIVn > 0 ? m.cIV/m.cIVn : 0,
+      putIV:  m.pIVn > 0 ? m.pIV/m.pIVn : 0,
     };
   });
 
-  // 聚合GEX曲线（累加，用于找Flip点）
-  let running = 0;
-  const aggregateGex = strikeData.map(s => {
-    running += s.netGex;
-    return running;
-  });
+  // 聚合GEX曲线（累加净GEX，从最低行权价开始）
+  let cum = 0;
+  const aggregateGex = strikes.map(s => { cum += s.netGex; return cum; });
 
-  // ── Gamma Flip 点（聚合GEX第一次由负转正的点，最接近Spot）────────────────
-  // 找所有过零点，取最接近Spot的那个
-  const crossings = [];
-  for (let i = 1; i < strikes.length; i++) {
-    const a = aggregateGex[i - 1];
-    const b = aggregateGex[i];
-    if ((a < 0 && b >= 0) || (a >= 0 && b < 0)) {
-      // 线性插值
-      const ratio = Math.abs(a) / (Math.abs(a) + Math.abs(b));
-      const flipPrice = strikes[i - 1] + ratio * (strikes[i] - strikes[i - 1]);
-      crossings.push(flipPrice);
-    }
-  }
-
+  // Gamma Flip：聚合GEX穿越零轴的第一个点
   let gammaFlip = null;
-  if (crossings.length > 0 && spotPrice) {
-    // 取最接近Spot的过零点
-    gammaFlip = crossings.reduce((prev, curr) =>
-      Math.abs(curr - spotPrice) < Math.abs(prev - spotPrice) ? curr : prev
-    );
-  } else if (crossings.length > 0) {
-    gammaFlip = crossings[0];
-  }
-  if (gammaFlip) gammaFlip = parseFloat(gammaFlip.toFixed(2));
-
-  // ── Call Wall / Put Wall（限制在Spot ±40%范围内）────────────────────────
-  const rangeMin = spotPrice * 0.60;
-  const rangeMax = spotPrice * 1.40;
-  const inRange = strikeData.filter(s => s.strike >= rangeMin && s.strike <= rangeMax);
-
-  let callWall = null, maxCallGex = -Infinity;
-  let putWall = null, maxPutGexAbs = -Infinity;
-
-  for (const s of inRange) {
-    if (s.callGex > maxCallGex) { maxCallGex = s.callGex; callWall = s.strike; }
-    if (Math.abs(s.putGex) > maxPutGexAbs) { maxPutGexAbs = Math.abs(s.putGex); putWall = s.strike; }
-  }
-
-  // ── ATM IV（最近行权价的有效IV）────────────────────────────────────────────
-  let atmIV = null;
-  if (spotPrice && strikeData.length) {
-    // 找最近5个行权价，取有效IV的平均
-    const sorted = [...strikeData].sort((a, b) => Math.abs(a.strike - spotPrice) - Math.abs(b.strike - spotPrice));
-    const candidates = sorted.slice(0, 5);
-    const ivValues = [];
-    for (const s of candidates) {
-      if (s.callIV !== null) ivValues.push(s.callIV);
-      if (s.putIV !== null) ivValues.push(s.putIV);
-    }
-    if (ivValues.length > 0) {
-      atmIV = ivValues.reduce((a, b) => a + b, 0) / ivValues.length;
+  for (let i = 1; i < strikes.length; i++) {
+    const p = aggregateGex[i-1], c = aggregateGex[i];
+    if ((p < 0 && c >= 0) || (p >= 0 && c < 0)) {
+      const ratio = Math.abs(p) / (Math.abs(p) + Math.abs(c));
+      gammaFlip = parseFloat((strikes[i-1].strike + ratio*(strikes[i].strike - strikes[i-1].strike)).toFixed(2));
+      break;
     }
   }
-
-  // ── 获取Call Wall / Put Wall 的 IV ──────────────────────────────────────
-  let callWallIV = null, putWallIV = null;
-  if (callWall) {
-    const cws = strikeData.find(s => s.strike === callWall);
-    if (cws) callWallIV = cws.callIV ?? cws.putIV;
-  }
-  if (putWall) {
-    const pws = strikeData.find(s => s.strike === putWall);
-    if (pws) putWallIV = pws.putIV ?? pws.callIV;
+  // 无穿越则取聚合GEX绝对值最小点
+  if (gammaFlip === null) {
+    let minI = 0;
+    aggregateGex.forEach((v,i) => { if (Math.abs(v) < Math.abs(aggregateGex[minI])) minI = i; });
+    gammaFlip = strikes[minI].strike;
   }
 
-  return {
-    strikes: strikeData,
-    aggregateGex,
-    gammaFlip,
-    callWall,
-    putWall,
-    atmIV,
-    callWallIV,
-    putWallIV,
-    expirationDates: expirationDates.sort(),
-  };
-}
+  // Call Wall：净GEX最大正值行权价
+  let callWall = null, maxNet = -Infinity;
+  strikes.forEach(s => { if (s.netGex > maxNet) { maxNet = s.netGex; callWall = s.strike; } });
 
-// ─── IV 历史 ──────────────────────────────────────────────────────────────────
-async function storeIVHistory(env, symbol, atmIV, callWallIV, putWallIV) {
-  const today = new Date().toISOString().split('T')[0];
-  const key = `iv2:${symbol}:${today}`;
-  let history = [];
-  try {
-    const existing = await env.GEX_KV.get(key);
-    if (existing) history = JSON.parse(existing);
-  } catch(e) {}
+  // Put Wall：净GEX最大负值（绝对值最大）行权价
+  let putWall = null, minNet = Infinity;
+  strikes.forEach(s => { if (s.netGex < minNet) { minNet = s.netGex; putWall = s.strike; } });
 
-  history.push({
-    time: getETTimeString(),
-    timestamp: Date.now(),
-    atmIV: atmIV ?? null,
-    callWallIV: callWallIV ?? null,
-    putWallIV: putWallIV ?? null,
+  // ATM IV：距spot最近5个行权价的有效IV均值
+  let atmIV = 0;
+  const near = [...strikes].sort((a,b) => Math.abs(a.strike-spot) - Math.abs(b.strike-spot)).slice(0,5);
+  const ivVals = near.flatMap(s => {
+    const vs = [];
+    if (s.callIV > 0) vs.push(s.callIV);
+    if (s.putIV  > 0) vs.push(s.putIV);
+    return vs;
   });
+  if (ivVals.length) atmIV = parseFloat((ivVals.reduce((a,b)=>a+b,0)/ivVals.length).toFixed(2));
 
-  const trimmed = history.slice(-96);
-  await env.GEX_KV.put(key, JSON.stringify(trimmed), { expirationTtl: 86400 * 2 });
-  return trimmed;
+  return { strikes, aggregateGex, gammaFlip, callWall, putWall, atmIV };
 }
 
-async function getIVHistory(env, symbol) {
-  const today = new Date().toISOString().split('T')[0];
-  const key = `iv2:${symbol}:${today}`;
-  try {
-    const data = await env.GEX_KV.get(key);
-    return data ? JSON.parse(data) : [];
-  } catch(e) { return []; }
-}
-
-// ─── 到期日列表 ───────────────────────────────────────────────────────────────
-async function fetchExpirationDates(symbol, token) {
+// ── 到期日列表 ────────────────────────────────────────────────────────────────
+async function getExpDates(symbol, token) {
   const now = new Date();
-  const fromDate = now.toISOString().split('T')[0];
-  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0);
-  const toDate = nextMonth.toISOString().split('T')[0];
-
-  const chainData = await fetchOptionChain(symbol, token, fromDate, toDate);
+  const from = now.toISOString().split('T')[0];
+  const to   = new Date(now.getFullYear(), now.getMonth()+2, 0).toISOString().split('T')[0];
+  const chain = await getChain(symbol, token, from, to);
   const dates = new Set();
-  const addDates = (map) => {
-    if (!map) return;
-    for (const key of Object.keys(map)) dates.add(key.split(':')[0]);
-  };
-  addDates(chainData.callExpDateMap);
-  addDates(chainData.putExpDateMap);
+  const add = m => { if(m) Object.keys(m).forEach(k => dates.add(k.split(':')[0])); };
+  add(chain.callExpDateMap); add(chain.putExpDateMap);
   return [...dates].sort();
 }
 
-// ─── 路由 ─────────────────────────────────────────────────────────────────────
-export default {
-  async fetch(request, env) {
-    if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
+// ── IV 历史 ───────────────────────────────────────────────────────────────────
+async function storeIV(env, symbol, atmIV, cwStrike, cwIV, pwStrike, pwIV) {
+  const key = `iv:${symbol.replace('/','_')}:${new Date().toISOString().split('T')[0]}`;
+  let hist = [];
+  try { const r = await env.GEX_KV.get(key); if(r) hist = JSON.parse(r); } catch(_){}
+  hist.push({
+    ts: Date.now(),
+    time: new Date().toLocaleTimeString('zh-CN',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false}),
+    atmIV: atmIV > 0 ? atmIV : null,
+    cwStrike, cwIV: cwIV > 0 ? cwIV : null,
+    pwStrike, pwIV: pwIV > 0 ? pwIV : null,
+  });
+  hist = hist.slice(-100);
+  await env.GEX_KV.put(key, JSON.stringify(hist), { expirationTtl: 172800 });
+  return hist;
+}
 
-    const url = new URL(request.url);
-    const path = url.pathname;
+async function getIV(env, symbol) {
+  const key = `iv:${symbol.replace('/','_')}:${new Date().toISOString().split('T')[0]}`;
+  try { const r = await env.GEX_KV.get(key); return r ? JSON.parse(r) : []; } catch(_){ return []; }
+}
+
+// ── 路由 ──────────────────────────────────────────────────────────────────────
+export default {
+  async fetch(req, env) {
+    if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
+    const { pathname: path, searchParams: q } = new URL(req.url);
 
     try {
-      // ── /api/health ──────────────────────────────────────────────────────
-      if (path === '/api/health') {
-        return jsonRes({ status: 'ok', time: getETTimeString(), isMarketHours: isMarketHours() });
-      }
+      if (path === '/api/health') return ok({ status:'ok', time:etNow(), market:isMarketOpen() });
 
-      // ── /api/expirations?symbol=NVDA ─────────────────────────────────────
+      // 获取到期日
       if (path === '/api/expirations') {
-        const symbol = url.searchParams.get('symbol')?.toUpperCase();
-        if (!symbol) return errRes('symbol required', 400);
-        if (symbol.startsWith('/')) return errRes('暂不支持期货期权。建议使用对应ETF：/ES→SPY，/GC→GLD，/NQ→QQQ', 400);
-
-        const token = await getAccessToken(env);
-        const dates = await fetchExpirationDates(symbol, token);
-        return jsonRes({ symbol, dates, updatedAt: getETTimeString() });
+        const sym = (q.get('symbol')||'').trim().toUpperCase();
+        if (!sym) return err('symbol required', 400);
+        const token = await getToken(env);
+        const dates = await getExpDates(sym, token);
+        return ok({ symbol:sym, dates, updatedAt:etNow() });
       }
 
-      // ── /api/gex?symbol=NVDA&dates=2026-02-21,2026-02-28 ─────────────────
+      // GEX 数据
       if (path === '/api/gex') {
-        const symbol = url.searchParams.get('symbol')?.toUpperCase();
-        if (!symbol) return errRes('symbol required', 400);
-        if (symbol.startsWith('/')) return errRes('暂不支持期货期权。建议：/ES→SPY，/GC→GLD，/NQ→QQQ', 400);
+        const sym = (q.get('symbol')||'').trim().toUpperCase();
+        if (!sym) return err('symbol required', 400);
+        const datesParam = q.get('dates');
+        const token = await getToken(env);
+        const spot  = await getQuote(sym, token);
 
-        const token = await getAccessToken(env);
-        const quoteData = await fetchQuote(symbol, token);
-        const spotPrice = quoteData.last;
-        if (!spotPrice) throw new Error('无法获取现货价格');
-
-        let chainData;
-        const datesParam = url.searchParams.get('dates');
+        let chain;
         if (datesParam) {
-          const dates = datesParam.split(',').sort();
-          chainData = await fetchOptionChain(symbol, token, dates[0], dates[dates.length - 1]);
+          const ds = datesParam.split(',').sort();
+          chain = await getChain(sym, token, ds[0], ds[ds.length-1]);
         } else {
           const now = new Date();
-          const fromDate = now.toISOString().split('T')[0];
-          const nextMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0);
-          const toDate = nextMonth.toISOString().split('T')[0];
-          chainData = await fetchOptionChain(symbol, token, fromDate, toDate);
+          const from = now.toISOString().split('T')[0];
+          const to   = new Date(now.getFullYear(), now.getMonth()+2, 0).toISOString().split('T')[0];
+          chain = await getChain(sym, token, from, to);
         }
 
-        const gex = calculateGEX(chainData, spotPrice);
-        if (!gex) throw new Error('GEX计算失败，期权数据可能为空');
+        const gex = calcGEX(chain, spot);
+        const cw = gex.callWall ? gex.strikes.find(s=>s.strike===gex.callWall) : null;
+        const pw = gex.putWall  ? gex.strikes.find(s=>s.strike===gex.putWall)  : null;
+        await storeIV(env, sym, gex.atmIV, gex.callWall, cw?.callIV||0, gex.putWall, pw?.putIV||0);
 
-        await storeIVHistory(env, symbol, gex.atmIV, gex.callWallIV, gex.putWallIV);
-
-        return jsonRes({
-          symbol,
-          spotPrice,
-          gammaFlip: gex.gammaFlip,
-          callWall: gex.callWall,
-          putWall: gex.putWall,
-          atmIV: gex.atmIV,
-          callWallIV: gex.callWallIV,
-          putWallIV: gex.putWallIV,
-          strikes: gex.strikes,
-          aggregateGex: gex.aggregateGex,
-          expirationDates: gex.expirationDates,
-          updatedAt: getETTimeString(),
-          isMarketHours: isMarketHours(),
-        });
+        return ok({ symbol:sym, spotPrice:spot, ...gex,
+          expirationDates: [...new Set(chain.callExpDateMap ? Object.keys(chain.callExpDateMap).map(k=>k.split(':')[0]) : [])].sort(),
+          updatedAt:etNow(), isMarketHours:isMarketOpen() });
       }
 
-      // ── /api/doomsday?symbol=SPY ──────────────────────────────────────────
+      // 末日观察
       if (path === '/api/doomsday') {
-        const symbol = url.searchParams.get('symbol')?.toUpperCase();
-        if (!symbol) return errRes('symbol required', 400);
-        if (symbol.startsWith('/')) return errRes('暂不支持期货期权', 400);
+        const sym = (q.get('symbol')||'').trim().toUpperCase();
+        if (!sym) return err('symbol required', 400);
+        const token = await getToken(env);
+        const spot  = await getQuote(sym, token);
+        const dates = await getExpDates(sym, token);
+        if (!dates.length) return err('No expiration dates', 404);
 
-        const token = await getAccessToken(env);
-        const quoteData = await fetchQuote(symbol, token);
-        const spotPrice = quoteData.last;
+        const nearest = dates[0];
+        const chain   = await getChain(sym, token, nearest, nearest);
+        const gex     = calcGEX(chain, spot);
 
-        const allDates = await fetchExpirationDates(symbol, token);
-        if (!allDates.length) return errRes('No expiration dates', 404);
-
-        const nearestDate = allDates[0];
-        const chainData = await fetchOptionChain(symbol, token, nearestDate, nearestDate);
-        const gex = calculateGEX(chainData, spotPrice);
-        if (!gex) throw new Error('GEX计算失败');
-
-        // Max/Min GEX（限制在Spot ±40%范围内）
-        const inRange = gex.strikes.filter(s => s.strike >= spotPrice * 0.60 && s.strike <= spotPrice * 1.40);
-        let maxGex = { strike: null, value: -Infinity };
-        let minGex = { strike: null, value: Infinity };
-        for (const s of inRange) {
-          if (s.netGex > maxGex.value) maxGex = { strike: s.strike, value: s.netGex };
-          if (s.netGex < minGex.value) minGex = { strike: s.strike, value: s.netGex };
-        }
-
-        await storeIVHistory(env, symbol + '_doom', gex.atmIV, gex.callWallIV, gex.putWallIV);
-
-        return jsonRes({
-          symbol,
-          spotPrice,
-          expirationDate: nearestDate,
-          gammaFlip: gex.gammaFlip,
-          callWall: gex.callWall,
-          putWall: gex.putWall,
-          atmIV: gex.atmIV,
-          callWallIV: gex.callWallIV,
-          putWallIV: gex.putWallIV,
-          strikes: gex.strikes,
-          aggregateGex: gex.aggregateGex,
-          maxGex,
-          minGex,
-          updatedAt: getETTimeString(),
-          isMarketHours: isMarketHours(),
+        let maxGex = {strike:null, value:-Infinity};
+        let minGex = {strike:null, value:Infinity};
+        gex.strikes.forEach(s => {
+          if (s.netGex > maxGex.value) maxGex = { strike:s.strike, value:s.netGex };
+          if (s.netGex < minGex.value) minGex = { strike:s.strike, value:s.netGex };
         });
+
+        const cw = gex.callWall ? gex.strikes.find(s=>s.strike===gex.callWall) : null;
+        const pw = gex.putWall  ? gex.strikes.find(s=>s.strike===gex.putWall)  : null;
+        const hist = await storeIV(env, sym, gex.atmIV, gex.callWall, cw?.callIV||0, gex.putWall, pw?.putIV||0);
+
+        return ok({ symbol:sym, spotPrice:spot, expirationDate:nearest, ...gex, maxGex, minGex,
+          updatedAt:etNow(), isMarketHours:isMarketOpen() });
       }
 
-      // ── /api/iv-history?symbol=SPY ────────────────────────────────────────
+      // IV历史
       if (path === '/api/iv-history') {
-        const symbol = url.searchParams.get('symbol')?.toUpperCase();
-        if (!symbol) return errRes('symbol required', 400);
-        const suffix = url.searchParams.get('doom') === '1' ? '_doom' : '';
-        const history = await getIVHistory(env, symbol + suffix);
-        return jsonRes({ symbol, history });
+        const sym = (q.get('symbol')||'').trim().toUpperCase();
+        if (!sym) return err('symbol required', 400);
+        return ok({ symbol:sym, history: await getIV(env, sym) });
       }
 
-      return errRes('Not found', 404);
-
-    } catch (e) {
-      console.error('Worker error:', e.message);
-      return errRes(e.message || 'Internal error');
+      return err('Not found', 404);
+    } catch(e) {
+      console.error(e.message, e.stack);
+      return err(e.message);
     }
   },
 
-  async scheduled(event, env, ctx) {
-    if (!isMarketHours()) return;
-    console.log('Scheduled tick:', getETTimeString());
+  async scheduled(event, env) {
+    if (isMarketOpen()) console.log('tick', etNow());
   },
 };
