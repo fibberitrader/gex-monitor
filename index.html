@@ -1,44 +1,1076 @@
-<script>
-// 在渲染函数中统一 X 轴
-function renderCharts(data) {
-    const labels = data.strikes.map(s => s.strike);
-    const gexValues = data.strikes.map(s => s.netGex);
-    const volOiValues = data.strikes.map(s => s.volOiRatio);
-
-    // GEX Chart
-    new Chart(ctxGex, {
-        type: 'bar',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: 'Net GEX',
-                data: gexValues,
-                backgroundColor: gexValues.map(v => v >= 0 ? '#00d084' : '#ff4757')
-            }]
-        },
-        options: {
-            scales: { x: { display: true, grid: { color: '#1e2d42' } } },
-            plugins: {
-                annotation: {
-                    annotations: {
-                        spot: { type: 'line', xMin: data.spotPrice, xMax: data.spotPrice, borderColor: 'white', borderDash: [5,5] },
-                        flip: { type: 'line', xMin: data.gammaFlip, xMax: data.gammaFlip, borderColor: '#ffd32a', borderDash: [2,2] }
-                    }
-                }
-            }
-        }
-    });
-
-    // 0DTE Vol/OI Chart (确保 X 轴与上方完全对齐)
-    new Chart(ctxVol, {
-        type: 'line',
-        data: {
-            labels: labels,
-            datasets: [{ label: 'Vol/OI Ratio', data: volOiValues, borderColor: '#74b9ff' }]
-        },
-        options: {
-            scales: { x: { display: false } } // 隐藏 X 轴文字但保持刻度对齐
-        }
-    });
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GEX Monitor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-annotation/3.0.1/chartjs-plugin-annotation.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg0:#07090d; --bg1:#0d1117; --bg2:#111823; --bg3:#18232f;
+  --border:#1c2a3a; --border2:#243548;
+  --green:#00d47e; --green2:#00d47e30; --green3:#00d47e15;
+  --red:#f03e52;   --red2:#f03e5230;   --red3:#f03e5215;
+  --yellow:#f5c518; --yellow2:#f5c51830;
+  --blue:#3b9eff;  --blue2:#3b9eff25;
+  --purple:#9b6dff;
+  --t1:#dce8f5; --t2:#7a8fa5; --t3:#3a4f63;
+  --mono:'JetBrains Mono',monospace;
+  --disp:'Syne',sans-serif;
+  --r:6px; --r2:10px;
 }
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg0);color:var(--t1);font-family:var(--mono);font-size:12px;line-height:1.5;min-height:100vh}
+
+/* ── Header ── */
+header{position:sticky;top:0;z-index:100;height:52px;background:var(--bg1);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;padding:0 20px}
+.logo{font-family:var(--disp);font-size:17px;font-weight:800;display:flex;align-items:center;gap:9px}
+.logo-pulse{width:7px;height:7px;background:var(--green);border-radius:50%;
+  box-shadow:0 0 8px var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
+.hdr-right{display:flex;align-items:center;gap:16px}
+.mkt-status{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--t2)}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--t3)}
+.dot.open{background:var(--green);box-shadow:0 0 5px var(--green)}
+.dot.closed{background:var(--red)}
+#et-clock{font-size:11px;color:var(--t2);font-variant-numeric:tabular-nums}
+
+/* ── Tabs ── */
+.tabs{display:flex;background:var(--bg1);border-bottom:1px solid var(--border);padding:0 20px}
+.tab{background:none;border:none;border-bottom:2px solid transparent;padding:11px 18px;
+  font-family:var(--disp);font-size:12px;font-weight:700;color:var(--t3);cursor:pointer;
+  letter-spacing:.6px;text-transform:uppercase;transition:.15s}
+.tab:hover{color:var(--t2)}
+.tab.active{color:var(--green);border-bottom-color:var(--green)}
+.panel{display:none;padding:20px}
+.panel.active{display:block}
+
+/* ── Card ── */
+.card{background:var(--bg1);border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;margin-bottom:18px}
+.card:last-child{margin-bottom:0}
+
+/* ── Symbol input bar ── */
+.sym-bar{display:flex;align-items:center;gap:10px;padding:12px 18px;
+  background:var(--bg2);border-bottom:1px solid var(--border);flex-wrap:wrap}
+.sym-num{font-family:var(--disp);font-size:10px;font-weight:800;color:var(--t3);
+  width:18px;text-align:center;letter-spacing:1px}
+.sym-input{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);
+  padding:5px 11px;font-family:var(--mono);font-size:14px;font-weight:700;
+  color:var(--t1);width:96px;text-transform:uppercase;letter-spacing:1px;outline:none;transition:.15s}
+.sym-input:focus{border-color:var(--green);box-shadow:0 0 0 2px var(--green3)}
+.btn{border:none;border-radius:var(--r);padding:5px 15px;font-family:var(--disp);
+  font-size:11px;font-weight:800;cursor:pointer;letter-spacing:.5px;text-transform:uppercase;transition:.15s}
+.btn-green{background:var(--green);color:#000}
+.btn-green:hover{filter:brightness(1.1)}
+.btn-red{background:var(--red);color:#fff}
+.btn-red:hover{filter:brightness(1.1)}
+.btn-outline{background:none;border:1px solid var(--border);color:var(--t2);font-family:var(--mono);font-size:10px}
+.btn-outline:hover{border-color:var(--green);color:var(--green)}
+.upd-time{font-size:10px;color:var(--t3);margin-left:auto;font-variant-numeric:tabular-nums}
+
+/* ── Metrics bar ── */
+.metrics{display:flex;border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:none}
+.metric{flex:1;min-width:90px;padding:9px 15px;border-right:1px solid var(--border)}
+.metric:last-child{border-right:none}
+.mlabel{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px}
+.mval{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--t1)}
+.mval.g{color:var(--green)} .mval.r{color:var(--red)} .mval.y{color:var(--yellow)} .mval.b{color:var(--blue)}
+
+/* ── Expiry selector ── */
+.expiry-bar{border-bottom:1px solid var(--border)}
+.expiry-toggle{display:flex;align-items:center;justify-content:space-between;padding:9px 18px;
+  background:var(--bg2);cursor:pointer;user-select:none;transition:.15s}
+.expiry-toggle:hover{background:var(--bg3)}
+.expiry-tlabel{font-size:11px;font-weight:700;color:var(--t2);display:flex;align-items:center;gap:8px;font-family:var(--disp)}
+.exp-summary{font-size:10px;color:var(--green)}
+.chevron{font-size:9px;color:var(--t3);transition:transform .2s}
+.chevron.open{transform:rotate(180deg)}
+.expiry-body{display:none;padding:12px 18px;background:var(--bg1);border-top:1px solid var(--border)}
+.expiry-body.open{display:block}
+.exp-grid{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:9px}
+.exp-chip{display:flex;align-items:center;gap:4px;padding:3px 9px;border-radius:4px;
+  background:var(--bg2);border:1px solid var(--border);font-size:10px;font-family:var(--mono);
+  color:var(--t2);cursor:pointer;transition:.15s;user-select:none}
+.exp-chip:hover{border-color:var(--border2);color:var(--t1)}
+.exp-chip.sel{background:var(--green2);border-color:var(--green);color:var(--green)}
+.exp-chip input{width:11px;height:11px;accent-color:var(--green)}
+.exp-actions{display:flex;gap:6px}
+
+/* ── Chart area ── */
+.chart-area{padding:14px;background:var(--bg1)}
+.chart-controls{display:flex;align-items:center;gap:7px;margin-bottom:10px;flex-wrap:wrap}
+.ctl-label{font-size:10px;color:var(--t3)}
+.zoom-btn{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);
+  padding:3px 10px;font-size:10px;color:var(--t2);cursor:pointer;font-family:var(--mono);transition:.15s}
+.zoom-btn:hover{border-color:var(--green);color:var(--green)}
+.zoom-btn.active{background:var(--green2);border-color:var(--green);color:var(--green)}
+.chart-wrap{position:relative}
+.overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;background:var(--bg1);z-index:10;gap:10px}
+.overlay.hidden{display:none}
+.spinner{width:24px;height:24px;border:2px solid var(--border);border-top-color:var(--green);
+  border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.ovl-text{font-size:11px;color:var(--t3)}
+
+/* ── Doom section ── */
+.doom-input{display:flex;align-items:center;gap:10px;padding:14px 20px;
+  background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);
+  margin-bottom:18px;flex-wrap:wrap}
+.doom-label{font-family:var(--disp);font-size:11px;font-weight:800;color:var(--red);
+  text-transform:uppercase;letter-spacing:1px}
+.doom-metrics{display:flex;gap:0;border:1px solid var(--border);border-radius:var(--r);
+  overflow:hidden;margin-left:auto}
+.doom-metrics .metric{min-width:80px;padding:7px 12px}
+
+/* ── Unit headers ── */
+.unit-hdr{display:flex;align-items:center;justify-content:space-between;padding:11px 18px;
+  background:var(--bg2);border-bottom:1px solid var(--border)}
+.unit-title{font-family:var(--disp);font-size:12px;font-weight:700;color:var(--t1);
+  display:flex;align-items:center;gap:8px}
+.unit-num{width:21px;height:21px;background:var(--red2);color:var(--red);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800}
+
+/* ── IV section ── */
+.iv-tags{display:flex;flex-wrap:wrap;gap:5px;padding:10px 18px;border-bottom:1px solid var(--border);background:var(--bg2)}
+.iv-tag{display:flex;align-items:center;gap:4px;padding:3px 9px;border-radius:4px;
+  border:1px solid var(--border);font-size:10px;font-family:var(--mono);
+  color:var(--t2);background:var(--bg1);cursor:pointer;transition:.15s}
+.iv-tag.sc{background:var(--green2);border-color:var(--green);color:var(--green)}
+.iv-tag.sp{background:var(--red2);border-color:var(--red);color:var(--red)}
+.iv-custom{display:flex;align-items:center;gap:7px;padding:8px 18px;
+  border-bottom:1px solid var(--border);background:var(--bg2)}
+.iv-custom-label{font-size:10px;color:var(--t3)}
+.iv-num-input{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);
+  padding:4px 9px;font-family:var(--mono);font-size:12px;color:var(--t1);width:80px;outline:none}
+.iv-num-input:focus{border-color:var(--purple)}
+.btn-purple{background:var(--purple);color:#fff;font-family:var(--disp);font-size:10px;font-weight:800}
+.btn-purple:hover{filter:brightness(1.15)}
+
+/* ── Squeeze panel ── */
+.squeeze{margin:12px 16px;padding:12px 16px;background:var(--bg2);
+  border-radius:var(--r);border:1px solid var(--border)}
+.sq-title{font-family:var(--disp);font-size:10px;font-weight:800;color:var(--t3);
+  text-transform:uppercase;letter-spacing:.8px;margin-bottom:9px}
+.sq-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.sq-item{padding:9px 12px;border-radius:var(--r);border:1px solid var(--border);background:var(--bg1)}
+.sq-dir{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;
+  margin-bottom:4px;font-family:var(--disp)}
+.sq-dir.up{color:var(--green)} .sq-dir.dn{color:var(--red)}
+.sq-signal{font-size:12px;font-weight:700;color:var(--t2);margin-bottom:3px}
+.sq-detail{font-size:10px;color:var(--t3);line-height:1.6}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.fade{animation:fadeIn .25s ease forwards}
+@media(max-width:768px){.sq-grid{grid-template-columns:1fr}.doom-metrics{display:none}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><div class="logo-pulse"></div>GEX Monitor</div>
+  <div class="hdr-right">
+    <div class="mkt-status"><div class="dot" id="mkt-dot"></div><span id="mkt-txt">--</span></div>
+    <div id="et-clock">--:--:-- ET</div>
+  </div>
+</header>
+
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('gex',this)">GEX 观察</button>
+  <button class="tab" onclick="switchTab('doom',this)">末日观察</button>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     第一部分：GEX 观察
+══════════════════════════════════════════════════ -->
+<div class="panel active" id="tab-gex">
+
+  <!-- 标的 1 -->
+  <div class="card" id="card-1">
+    <div class="sym-bar">
+      <div class="sym-num">01</div>
+      <input class="sym-input" id="sym-1" placeholder="NVDA" maxlength="8" value="NVDA">
+      <button class="btn btn-green" onclick="loadGEX(1)">加载</button>
+      <span class="upd-time" id="upd-1">未加载</span>
+    </div>
+    <div class="metrics" id="metrics-1">
+      <div class="metric"><div class="mlabel">现价 Spot</div><div class="mval" id="m1-spot">--</div></div>
+      <div class="metric"><div class="mlabel">Gamma Flip</div><div class="mval y" id="m1-flip">--</div></div>
+      <div class="metric"><div class="mlabel">Call Wall</div><div class="mval g" id="m1-cw">--</div></div>
+      <div class="metric"><div class="mlabel">Put Wall</div><div class="mval r" id="m1-pw">--</div></div>
+      <div class="metric"><div class="mlabel">ATM IV</div><div class="mval b" id="m1-iv">--</div></div>
+      <div class="metric"><div class="mlabel">Gamma 状态</div><div class="mval" id="m1-pos">--</div></div>
+    </div>
+    <div class="expiry-bar">
+      <div class="expiry-toggle" onclick="toggleExp(1)">
+        <div class="expiry-tlabel">📅 到期日筛选 <span class="exp-summary" id="exp-sum-1">--</span></div>
+        <div style="display:flex;align-items:center;gap:7px">
+          <button class="btn btn-outline" onclick="event.stopPropagation();applyExp(1)">应用</button>
+          <div class="chevron" id="exp-chev-1">▼</div>
+        </div>
+      </div>
+      <div class="expiry-body" id="exp-body-1">
+        <div class="exp-grid" id="exp-grid-1"><span style="color:var(--t3)">请先加载数据</span></div>
+        <div class="exp-actions">
+          <button class="btn btn-outline" onclick="selAllExp(1,true)">全选</button>
+          <button class="btn btn-outline" onclick="selAllExp(1,false)">清除</button>
+          <button class="btn btn-outline" onclick="selThisMonth(1)">本月</button>
+          <button class="btn btn-outline" onclick="selNextMonth(1)">次月</button>
+        </div>
+      </div>
+    </div>
+    <div class="chart-area">
+      <div class="chart-controls">
+        <span class="ctl-label">显示范围：</span>
+        <button class="zoom-btn active" id="z1-20" onclick="setZoom(1,20)">Spot±20</button>
+        <button class="zoom-btn" id="z1-40" onclick="setZoom(1,40)">Spot±40</button>
+        <button class="zoom-btn" id="z1-0"  onclick="setZoom(1,0)">全部</button>
+      </div>
+      <div class="chart-wrap" style="height:340px">
+        <div class="overlay" id="ov-1"><div class="spinner"></div><div class="ovl-text" id="ovt-1">请输入标的后点击加载</div></div>
+        <canvas id="ch-1"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- 标的 2 -->
+  <div class="card" id="card-2">
+    <div class="sym-bar">
+      <div class="sym-num">02</div>
+      <input class="sym-input" id="sym-2" placeholder="SPY" maxlength="8" value="SPY">
+      <button class="btn btn-green" onclick="loadGEX(2)">加载</button>
+      <span class="upd-time" id="upd-2">未加载</span>
+    </div>
+    <div class="metrics" id="metrics-2">
+      <div class="metric"><div class="mlabel">现价 Spot</div><div class="mval" id="m2-spot">--</div></div>
+      <div class="metric"><div class="mlabel">Gamma Flip</div><div class="mval y" id="m2-flip">--</div></div>
+      <div class="metric"><div class="mlabel">Call Wall</div><div class="mval g" id="m2-cw">--</div></div>
+      <div class="metric"><div class="mlabel">Put Wall</div><div class="mval r" id="m2-pw">--</div></div>
+      <div class="metric"><div class="mlabel">ATM IV</div><div class="mval b" id="m2-iv">--</div></div>
+      <div class="metric"><div class="mlabel">Gamma 状态</div><div class="mval" id="m2-pos">--</div></div>
+    </div>
+    <div class="expiry-bar">
+      <div class="expiry-toggle" onclick="toggleExp(2)">
+        <div class="expiry-tlabel">📅 到期日筛选 <span class="exp-summary" id="exp-sum-2">--</span></div>
+        <div style="display:flex;align-items:center;gap:7px">
+          <button class="btn btn-outline" onclick="event.stopPropagation();applyExp(2)">应用</button>
+          <div class="chevron" id="exp-chev-2">▼</div>
+        </div>
+      </div>
+      <div class="expiry-body" id="exp-body-2">
+        <div class="exp-grid" id="exp-grid-2"><span style="color:var(--t3)">请先加载数据</span></div>
+        <div class="exp-actions">
+          <button class="btn btn-outline" onclick="selAllExp(2,true)">全选</button>
+          <button class="btn btn-outline" onclick="selAllExp(2,false)">清除</button>
+          <button class="btn btn-outline" onclick="selThisMonth(2)">本月</button>
+          <button class="btn btn-outline" onclick="selNextMonth(2)">次月</button>
+        </div>
+      </div>
+    </div>
+    <div class="chart-area">
+      <div class="chart-controls">
+        <span class="ctl-label">显示范围：</span>
+        <button class="zoom-btn active" id="z2-20" onclick="setZoom(2,20)">Spot±20</button>
+        <button class="zoom-btn" id="z2-40" onclick="setZoom(2,40)">Spot±40</button>
+        <button class="zoom-btn" id="z2-0"  onclick="setZoom(2,0)">全部</button>
+      </div>
+      <div class="chart-wrap" style="height:340px">
+        <div class="overlay" id="ov-2"><div class="spinner"></div><div class="ovl-text" id="ovt-2">请输入标的后点击加载</div></div>
+        <canvas id="ch-2"></canvas>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /tab-gex -->
+
+<!-- ══════════════════════════════════════════════════
+     第二部分：末日观察
+══════════════════════════════════════════════════ -->
+<div class="panel" id="tab-doom">
+
+  <div class="doom-input">
+    <div class="doom-label">⚡ 末日观察</div>
+    <input class="sym-input" id="doom-sym" placeholder="SPY" maxlength="8" value="SPY">
+    <button class="btn btn-red" onclick="loadDoom()">加载</button>
+    <span class="upd-time" id="doom-upd">未加载</span>
+    <div class="doom-metrics">
+      <div class="metric"><div class="mlabel">到期日</div><div class="mval y" id="dm-exp">--</div></div>
+      <div class="metric"><div class="mlabel">现价</div><div class="mval" id="dm-spot">--</div></div>
+      <div class="metric"><div class="mlabel">Flip点</div><div class="mval y" id="dm-flip">--</div></div>
+      <div class="metric"><div class="mlabel">Call Wall</div><div class="mval g" id="dm-cw">--</div></div>
+      <div class="metric"><div class="mlabel">Put Wall</div><div class="mval r" id="dm-pw">--</div></div>
+      <div class="metric"><div class="mlabel">ATM IV</div><div class="mval b" id="dm-iv">--</div></div>
+    </div>
+  </div>
+
+  <!-- 单元① 0DTE GEX分布 -->
+  <div class="card">
+    <div class="unit-hdr">
+      <div class="unit-title"><div class="unit-num">1</div>0DTE GEX 分布（最近到期日）</div>
+      <div style="display:flex;gap:6px">
+        <button class="zoom-btn active" id="dz-20" onclick="setDZoom(20)">Spot±20</button>
+        <button class="zoom-btn" id="dz-40" onclick="setDZoom(40)">Spot±40</button>
+        <button class="zoom-btn" id="dz-0"  onclick="setDZoom(0)">全部</button>
+      </div>
+    </div>
+    <div class="chart-area">
+      <div class="chart-wrap" style="height:300px">
+        <div class="overlay" id="ov-d1"><div class="spinner"></div><div class="ovl-text">请加载数据</div></div>
+        <canvas id="ch-d1"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- 单元② Vol/OI（与上图X轴严格对齐） -->
+  <div class="card">
+    <div class="unit-hdr">
+      <div class="unit-title"><div class="unit-num">2</div>成交量 / 未平仓合约（Vol/OI）热力图</div>
+      <div style="font-size:10px;color:var(--t3)">柱越高 = 该行权价越活跃；与上图X轴对齐</div>
+    </div>
+    <div class="chart-area" style="padding-top:0">
+      <!-- 注意：移除padding-top，让两图X轴尽量对齐 -->
+      <div class="chart-wrap" style="height:160px">
+        <div class="overlay" id="ov-d2"><div class="spinner"></div><div class="ovl-text">请加载数据</div></div>
+        <canvas id="ch-d2"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- 单元③ 日内IV -->
+  <div class="card">
+    <div class="unit-hdr">
+      <div class="unit-title"><div class="unit-num">3</div>关键行权价 日内隐含波动率变化</div>
+    </div>
+    <div class="iv-tags" id="iv-tags">
+      <span style="color:var(--t3);font-size:10px">加载后自动显示Call/Put Wall行权价</span>
+    </div>
+    <div class="iv-custom">
+      <span class="iv-custom-label">自定义行权价：</span>
+      <input class="iv-num-input" id="iv-custom" type="number" placeholder="190" step="0.5">
+      <button class="btn btn-purple" onclick="addCustomIV()">+ 添加</button>
+    </div>
+    <div class="chart-area">
+      <div class="chart-wrap" style="height:220px">
+        <div class="overlay" id="ov-d3"><div class="spinner"></div><div class="ovl-text">请加载数据</div></div>
+        <canvas id="ch-d3"></canvas>
+      </div>
+    </div>
+    <!-- Gamma Squeeze 判断 -->
+    <div class="squeeze">
+      <div class="sq-title">⚡ Gamma Squeeze 判断（三条件同时满足 = 高风险）</div>
+      <div class="sq-grid">
+        <div class="sq-item">
+          <div class="sq-dir up">▲ 看涨挤压（突破Call Wall）</div>
+          <div class="sq-signal" id="sq-up">等待数据...</div>
+          <div class="sq-detail" id="sq-up-d">①现价距Call Wall≤1% ②Call Wall IV持续3期上升 ③Call Wall Vol/OI>0.3</div>
+        </div>
+        <div class="sq-item">
+          <div class="sq-dir dn">▼ 看跌挤压（突破Put Wall）</div>
+          <div class="sq-signal" id="sq-dn">等待数据...</div>
+          <div class="sq-detail" id="sq-dn-d">①现价距Put Wall≤1% ②Put Wall IV持续3期上升 ③Put Wall Vol/OI>0.3</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /tab-doom -->
+
+<script>
+// ═══ 配置 ═══════════════════════════════════════════════════════════════════
+// 部署后替换为你的Worker URL
+const API = 'https://gex-monitor-worker.fibitrader.workers.dev';
+
+// ═══ 全局状态 ════════════════════════════════════════════════════════════════
+const S = {
+  gex: {
+    1: { data:null, allDates:[], selDates:[], zoom:20, chart:null },
+    2: { data:null, allDates:[], selDates:[], zoom:20, chart:null },
+  },
+  doom: {
+    data:null, ivHistory:[], selStrikes:new Set(), customStrikes:new Set(),
+    zoom:20, charts:{d1:null,d2:null,d3:null},
+    sharedLabels:[], // 共享X轴标签（单元①②对齐用）
+  },
+};
+
+// ═══ Chart.js 全局配置 ═══════════════════════════════════════════════════════
+Chart.defaults.color = '#7a8fa5';
+Chart.defaults.borderColor = '#1c2a3a';
+Chart.defaults.font.family = "'JetBrains Mono',monospace";
+Chart.defaults.font.size = 10;
+
+// ═══ 时钟 & 市场状态 ══════════════════════════════════════════════════════════
+function tick() {
+  const now = new Date();
+  const et = new Date(now.toLocaleString('en-US',{timeZone:'America/New_York'}));
+  const hm = et.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  document.getElementById('et-clock').textContent = hm + ' ET';
+  const d=et.getDay(), m=et.getHours()*60+et.getMinutes();
+  const open=d>=1&&d<=5&&m>=510&&m<960;
+  const pre =d>=1&&d<=5&&m>=510&&m<570;
+  const dot=document.getElementById('mkt-dot'), txt=document.getElementById('mkt-txt');
+  if(!d||d===6){dot.className='dot closed';txt.textContent='周末休市';}
+  else if(open&&pre){dot.className='dot open';txt.textContent='盘前监控中';}
+  else if(open){dot.className='dot open';txt.textContent='盘中';}
+  else{dot.className='dot closed';txt.textContent='已收盘';}
+}
+setInterval(tick,1000); tick();
+
+// ═══ Tab切换 ══════════════════════════════════════════════════════════════════
+function switchTab(id, el) {
+  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-'+id).classList.add('active');
+}
+
+// ═══ API ═════════════════════════════════════════════════════════════════════
+async function apiFetch(path) {
+  const r = await fetch(API + path);
+  if (!r.ok) { const e=await r.json().catch(()=>({error:r.statusText})); throw new Error(e.error||'HTTP '+r.status); }
+  return r.json();
+}
+
+// ═══ 格式化 ═══════════════════════════════════════════════════════════════════
+const fp = v => v!=null ? Number(v).toFixed(2) : '--';
+const fiv = v => v!=null && v>0 ? Number(v).toFixed(2)+'%' : '--';
+function fgex(v) {
+  const a=Math.abs(v);
+  if(a>=1e9) return (v/1e9).toFixed(3)+'B';
+  if(a>=1e6) return (v/1e6).toFixed(2)+'M';
+  if(a>=1e3) return (v/1e3).toFixed(1)+'K';
+  return v.toFixed(0);
+}
+
+// ═══ overlay ═════════════════════════════════════════════════════════════════
+function showOverlay(id, msg) {
+  const el=document.getElementById(id); if(!el)return;
+  el.classList.remove('hidden');
+  const t=el.querySelector('.ovl-text'); if(t)t.textContent=msg||'加载中...';
+}
+function hideOverlay(id) {
+  const el=document.getElementById(id); if(el) el.classList.add('hidden');
+}
+
+// ═══ GEX图表构建（每行权价一根净GEX柱） ══════════════════════════════════════
+function buildGEXChart(canvas, data, spot, flip, callWall, putWall, zoom, existingChart) {
+  if (existingChart) existingChart.destroy();
+
+  let strikes = data.strikes;
+  if (zoom>0 && spot) {
+    strikes = strikes.filter(s => Math.abs(s.strike-spot) <= zoom);
+  }
+  // 若过滤后数据太少，退回全部
+  if (strikes.length < 3) strikes = data.strikes;
+
+  const labels = strikes.map(s => s.strike);
+  const netGEX  = strikes.map(s => s.netGEX / 1e6);  // 单位M
+
+  // 聚合GEX曲线
+  const aggMap = {};
+  data.strikes.forEach((s,i) => { aggMap[s.strike] = data.aggregateGEX[i] / 1e9; });
+  const aggVals = strikes.map(s => aggMap[s.strike] ?? 0);
+
+  // 柱颜色：净GEX正绿负红
+  const barColors = netGEX.map(v => v>=0 ? '#00d47e99' : '#f03e5299');
+  const barBorder = netGEX.map(v => v>=0 ? '#00d47e' : '#f03e52');
+
+  // 标注
+  const annotations = {};
+
+  // Gamma Flip 红色虚线
+  if (flip!=null) {
+    annotations.flip = {
+      type:'line', xMin:flip, xMax:flip,
+      borderColor:'#f03e52', borderWidth:1.5, borderDash:[5,4],
+      label:{display:true, content:`Flip ${fp(flip)}`, position:'start',
+             color:'#f03e52', backgroundColor:'transparent', font:{size:9,weight:'bold'}}
+    };
+  }
+
+  // Spot 绿色实线
+  if (spot) {
+    annotations.spot = {
+      type:'line', xMin:spot, xMax:spot,
+      borderColor:'#00d47e', borderWidth:2,
+      label:{display:true, content:`${fp(spot)}`, position:'start',
+             color:'#00d47e', backgroundColor:'transparent', font:{size:9,weight:'bold'}}
+    };
+  }
+
+  // Call Wall 绿虚线（在显示范围内才标注）
+  if (callWall && (!zoom || Math.abs(callWall-spot)<=zoom+5)) {
+    annotations.cw = {
+      type:'line', xMin:callWall, xMax:callWall,
+      borderColor:'#00d47e70', borderWidth:1, borderDash:[4,3],
+      label:{display:true, content:`CW ${callWall}`, position:'end',
+             color:'#00d47e', backgroundColor:'transparent', font:{size:9}}
+    };
+  }
+
+  // Put Wall 红虚线
+  if (putWall && (!zoom || Math.abs(putWall-spot)<=zoom+5)) {
+    annotations.pw = {
+      type:'line', xMin:putWall, xMax:putWall,
+      borderColor:'#f03e5270', borderWidth:1, borderDash:[4,3],
+      label:{display:true, content:`PW ${putWall}`, position:'end',
+             color:'#f03e52', backgroundColor:'transparent', font:{size:9}}
+    };
+  }
+
+  return new Chart(canvas, {
+    type:'bar',
+    data:{
+      labels,
+      datasets:[
+        {
+          label:'净 GEX (M)',
+          data: netGEX,
+          backgroundColor: barColors,
+          borderColor: barBorder,
+          borderWidth: 1,
+          yAxisID:'y',
+        },
+        {
+          label:'聚合 GEX (B)',
+          data: aggVals,
+          type:'line',
+          yAxisID:'y2',
+          borderColor:'#3b9eff',
+          borderWidth:2,
+          pointRadius:0,
+          tension:0.4,
+          fill:false,
+        }
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{boxWidth:12,padding:14,color:'#7a8fa5'}},
+        annotation:{annotations},
+        tooltip:{
+          backgroundColor:'#111823', borderColor:'#1c2a3a', borderWidth:1,
+          callbacks:{
+            label:ctx => {
+              if(ctx.datasetIndex===1) return `聚合GEX: ${ctx.raw.toFixed(4)}B`;
+              const s = strikes[ctx.dataIndex];
+              const sign = s?.netGEX>=0?'+':'-';
+              return [`净GEX: ${sign}${Math.abs(ctx.raw).toFixed(2)}M`,
+                      `Call GEX: +${(s?.callGEX/1e6||0).toFixed(2)}M`,
+                      `Put  GEX: ${((s?.putGEX||0)/1e6).toFixed(2)}M`,
+                      `Call OI: ${(s?.callOI||0).toLocaleString()}`,
+                      `Put  OI: ${(s?.putOI||0).toLocaleString()}`];
+            }
+          }
+        }
+      },
+      scales:{
+        x:{type:'category', grid:{color:'#1c2a3a60'},
+           ticks:{maxRotation:45,autoSkip:true,maxTicksLimit:25,color:'#3a4f63'}},
+        y:{position:'left', grid:{color:'#1c2a3a60'},
+           title:{display:true,text:'净 GEX (M)',color:'#3a4f63'},
+           ticks:{color:'#7a8fa5'}},
+        y2:{position:'right', grid:{display:false},
+            title:{display:true,text:'聚合 GEX (B)',color:'#3b9eff50'},
+            ticks:{color:'#3b9eff80'}},
+      }
+    }
+  });
+}
+
+// ═══ 加载GEX ═════════════════════════════════════════════════════════════════
+async function loadGEX(idx) {
+  const sym = document.getElementById(`sym-${idx}`).value.trim().toUpperCase();
+  if (!sym) return alert('请输入标的代码');
+  showOverlay(`ov-${idx}`, '获取到期日...');
+  try {
+    const expData = await apiFetch(`/api/expirations?symbol=${encodeURIComponent(sym)}`);
+    S.gex[idx].allDates = expData.dates;
+    // 默认选当月+次月
+    const now=new Date();
+    const m0=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const m1=`${now.getFullYear()}-${String(now.getMonth()+2).padStart(2,'0')}`;
+    S.gex[idx].selDates = expData.dates.filter(d=>d.startsWith(m0)||d.startsWith(m1));
+    renderExpChips(idx, expData.dates, S.gex[idx].selDates);
+    await fetchRenderGEX(idx, sym);
+  } catch(e) {
+    showOverlay(`ov-${idx}`, '加载失败: '+e.message);
+    console.error(e);
+  }
+}
+
+async function fetchRenderGEX(idx, sym) {
+  if (!sym) sym = document.getElementById(`sym-${idx}`).value.trim().toUpperCase();
+  showOverlay(`ov-${idx}`, '加载中...');
+  try {
+    const sel = S.gex[idx].selDates;
+    const dp = sel.length ? `&dates=${sel.join(',')}` : '';
+    const data = await apiFetch(`/api/gex?symbol=${encodeURIComponent(sym)}${dp}`);
+    S.gex[idx].data = data;
+
+    // 更新指标
+    document.getElementById(`m${idx}-spot`).textContent = fp(data.spotPrice);
+    document.getElementById(`m${idx}-flip`).textContent = fp(data.gammaFlip);
+    document.getElementById(`m${idx}-cw`).textContent   = fp(data.callWall);
+    document.getElementById(`m${idx}-pw`).textContent   = fp(data.putWall);
+    document.getElementById(`m${idx}-iv`).textContent   = fiv(data.atmIV);
+    document.getElementById(`upd-${idx}`).textContent   = data.updatedAt;
+
+    const posEl = document.getElementById(`m${idx}-pos`);
+    if (data.spotPrice!=null && data.gammaFlip!=null) {
+      if (data.spotPrice >= data.gammaFlip) {
+        posEl.textContent='正 Gamma ▲'; posEl.className='mval g';
+      } else {
+        posEl.textContent='负 Gamma ▼'; posEl.className='mval r';
+      }
+    }
+
+    // 画图
+    const canvas = document.getElementById(`ch-${idx}`);
+    S.gex[idx].chart = buildGEXChart(canvas, data, data.spotPrice, data.gammaFlip,
+      data.callWall, data.putWall, S.gex[idx].zoom, S.gex[idx].chart);
+    hideOverlay(`ov-${idx}`);
+  } catch(e) {
+    showOverlay(`ov-${idx}`, '错误: '+e.message);
+    console.error(e);
+  }
+}
+
+// ═══ 缩放 ════════════════════════════════════════════════════════════════════
+function setZoom(idx, z) {
+  S.gex[idx].zoom = z;
+  [20,40,0].forEach(v => {
+    const btn=document.getElementById(`z${idx}-${v}`);
+    if(btn) btn.classList.toggle('active', v===z);
+  });
+  if (S.gex[idx].data) {
+    const d=S.gex[idx].data;
+    S.gex[idx].chart = buildGEXChart(
+      document.getElementById(`ch-${idx}`), d, d.spotPrice,
+      d.gammaFlip, d.callWall, d.putWall, z, S.gex[idx].chart);
+  }
+}
+
+function setDZoom(z) {
+  S.doom.zoom=z;
+  [20,40,0].forEach(v=>{
+    const btn=document.getElementById(`dz-${v}`);
+    if(btn) btn.classList.toggle('active',v===z);
+  });
+  if(S.doom.data) renderDoomCharts(S.doom.data);
+}
+
+// ═══ 到期日选择器 ═════════════════════════════════════════════════════════════
+function renderExpChips(idx, all, sel) {
+  const grid = document.getElementById(`exp-grid-${idx}`);
+  grid.innerHTML = '';
+  all.forEach(date => {
+    const isSel = sel.includes(date);
+    const chip = document.createElement('label');
+    chip.className = `exp-chip ${isSel?'sel':''}`;
+    chip.innerHTML = `<input type="checkbox" value="${date}" ${isSel?'checked':''}> ${date}`;
+    chip.querySelector('input').addEventListener('change', e => {
+      if (e.target.checked) { if(!S.gex[idx].selDates.includes(date)) S.gex[idx].selDates.push(date); chip.classList.add('sel'); }
+      else { S.gex[idx].selDates=S.gex[idx].selDates.filter(d=>d!==date); chip.classList.remove('sel'); }
+      updExpSum(idx);
+    });
+    grid.appendChild(chip);
+  });
+  updExpSum(idx);
+}
+
+function updExpSum(idx) {
+  document.getElementById(`exp-sum-${idx}`).textContent = `已选 ${S.gex[idx].selDates.length} 个`;
+}
+
+function toggleExp(idx) {
+  document.getElementById(`exp-body-${idx}`).classList.toggle('open');
+  document.getElementById(`exp-chev-${idx}`).classList.toggle('open');
+}
+
+function selAllExp(idx, v) {
+  S.gex[idx].selDates = v ? [...S.gex[idx].allDates] : [];
+  renderExpChips(idx, S.gex[idx].allDates, S.gex[idx].selDates);
+}
+
+function selThisMonth(idx) {
+  const m=`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+  S.gex[idx].selDates = S.gex[idx].allDates.filter(d=>d.startsWith(m));
+  renderExpChips(idx, S.gex[idx].allDates, S.gex[idx].selDates);
+}
+
+function selNextMonth(idx) {
+  const now=new Date();
+  const m=`${now.getFullYear()}-${String(now.getMonth()+2).padStart(2,'0')}`;
+  S.gex[idx].selDates = S.gex[idx].allDates.filter(d=>d.startsWith(m));
+  renderExpChips(idx, S.gex[idx].allDates, S.gex[idx].selDates);
+}
+
+async function applyExp(idx) {
+  const sym=document.getElementById(`sym-${idx}`).value.trim().toUpperCase();
+  document.getElementById(`exp-body-${idx}`).classList.remove('open');
+  document.getElementById(`exp-chev-${idx}`).classList.remove('open');
+  if (sym && S.gex[idx].data) await fetchRenderGEX(idx, sym);
+}
+
+// ═══ 末日观察 ═════════════════════════════════════════════════════════════════
+async function loadDoom() {
+  const sym = document.getElementById('doom-sym').value.trim().toUpperCase();
+  if (!sym) return alert('请输入标的代码');
+  ['ov-d1','ov-d2','ov-d3'].forEach(id => showOverlay(id,'加载中...'));
+  try {
+    const [doomData, ivHist] = await Promise.all([
+      apiFetch(`/api/doomsday?symbol=${encodeURIComponent(sym)}`),
+      apiFetch(`/api/iv-history?symbol=${encodeURIComponent(sym)}`),
+    ]);
+    S.doom.data = doomData;
+    S.doom.ivHistory = ivHist.history || [];
+
+    document.getElementById('dm-exp').textContent  = doomData.expirationDate||'--';
+    document.getElementById('dm-spot').textContent = fp(doomData.spotPrice);
+    document.getElementById('dm-flip').textContent = fp(doomData.gammaFlip);
+    document.getElementById('dm-cw').textContent   = fp(doomData.callWall);
+    document.getElementById('dm-pw').textContent   = fp(doomData.putWall);
+    document.getElementById('dm-iv').textContent   = fiv(doomData.atmIV);
+    document.getElementById('doom-upd').textContent= doomData.updatedAt;
+
+    // 默认选中 Call Wall + Put Wall
+    S.doom.selStrikes.clear();
+    if (doomData.callWall) S.doom.selStrikes.add(`c:${doomData.callWall}`);
+    if (doomData.putWall)  S.doom.selStrikes.add(`p:${doomData.putWall}`);
+
+    renderIVTags(doomData);
+    renderDoomCharts(doomData);
+    updateSqueeze(doomData, S.doom.ivHistory);
+  } catch(e) {
+    ['ov-d1','ov-d2','ov-d3'].forEach(id => showOverlay(id,'错误: '+e.message));
+    console.error(e);
+  }
+}
+
+// ── 单元①②共享标签（严格对齐X轴） ──────────────────────────────────────────
+function getFilteredStrikes(data) {
+  let strikes = data.strikes;
+  if (S.doom.zoom>0 && data.spotPrice) {
+    const filtered = strikes.filter(s=>Math.abs(s.strike-data.spotPrice)<=S.doom.zoom);
+    if (filtered.length >= 3) strikes = filtered;
+  }
+  return strikes;
+}
+
+function renderDoomCharts(data) {
+  const strikes = getFilteredStrikes(data);
+  S.doom.sharedLabels = strikes.map(s=>s.strike);
+  renderDoom1(data, strikes);
+  renderDoom2(data, strikes);  // 同一strikes数组，X轴完全对齐
+  renderDoom3(S.doom.ivHistory, data);
+  ['ov-d1','ov-d2','ov-d3'].forEach(id=>hideOverlay(id));
+}
+
+// 单元①：净GEX柱 + 聚合曲线 + MaxGEX/MinGEX水平虚线 + Flip + Spot + CW/PW
+function renderDoom1(data, strikes) {
+  if (S.doom.charts.d1) S.doom.charts.d1.destroy();
+  const canvas = document.getElementById('ch-d1');
+  const labels = strikes.map(s=>s.strike);
+  const netGEX  = strikes.map(s=>s.netGEX/1e6);
+  const aggMap={};
+  data.strikes.forEach((s,i)=>{aggMap[s.strike]=data.aggregateGEX[i]/1e9;});
+  const aggVals = strikes.map(s=>aggMap[s.strike]??0);
+
+  const barColors = netGEX.map(v=>v>=0?'#00d47e99':'#f03e5299');
+  const barBorder = netGEX.map(v=>v>=0?'#00d47e':'#f03e52');
+
+  const annotations = {};
+  if (data.gammaFlip!=null) {
+    annotations.flip={type:'line',xMin:data.gammaFlip,xMax:data.gammaFlip,
+      borderColor:'#f03e52',borderWidth:1.5,borderDash:[5,4],
+      label:{display:true,content:`Flip ${fp(data.gammaFlip)}`,position:'start',
+             color:'#f03e52',backgroundColor:'transparent',font:{size:9,weight:'bold'}}};
+  }
+  if (data.spotPrice) {
+    annotations.spot={type:'line',xMin:data.spotPrice,xMax:data.spotPrice,
+      borderColor:'#00d47e',borderWidth:2,
+      label:{display:true,content:fp(data.spotPrice),position:'start',
+             color:'#00d47e',backgroundColor:'transparent',font:{size:9,weight:'bold'}}};
+  }
+  if (data.callWall) {
+    annotations.cw={type:'line',xMin:data.callWall,xMax:data.callWall,
+      borderColor:'#00d47e60',borderWidth:1,borderDash:[4,3],
+      label:{display:true,content:`CW ${data.callWall}`,position:'end',
+             color:'#00d47e',backgroundColor:'transparent',font:{size:9}}};
+  }
+  if (data.putWall) {
+    annotations.pw={type:'line',xMin:data.putWall,xMax:data.putWall,
+      borderColor:'#f03e5260',borderWidth:1,borderDash:[4,3],
+      label:{display:true,content:`PW ${data.putWall}`,position:'end',
+             color:'#f03e52',backgroundColor:'transparent',font:{size:9}}};
+  }
+  // Max GEX 黄色水平虚线
+  if (data.maxGEX?.strike!=null) {
+    const maxM = data.maxGEX.value/1e6;
+    annotations.maxGEX={type:'line',yMin:maxM,yMax:maxM,
+      borderColor:'#f5c518',borderWidth:1,borderDash:[6,3],
+      label:{display:true,content:`MaxGEX@${data.maxGEX.strike} ${maxM.toFixed(1)}M`,
+             position:'end',color:'#f5c518',backgroundColor:'transparent',font:{size:9}}};
+  }
+  // Min GEX 紫色水平虚线
+  if (data.minGEX?.strike!=null) {
+    const minM = data.minGEX.value/1e6;
+    annotations.minGEX={type:'line',yMin:minM,yMax:minM,
+      borderColor:'#9b6dff',borderWidth:1,borderDash:[6,3],
+      label:{display:true,content:`MinGEX@${data.minGEX.strike} ${minM.toFixed(1)}M`,
+             position:'end',color:'#9b6dff',backgroundColor:'transparent',font:{size:9}}};
+  }
+
+  S.doom.charts.d1 = new Chart(canvas, {
+    type:'bar',
+    data:{labels,datasets:[
+      {label:'净 GEX (M)',data:netGEX,backgroundColor:barColors,borderColor:barBorder,borderWidth:1,yAxisID:'y'},
+      {label:'聚合 GEX (B)',data:aggVals,type:'line',yAxisID:'y2',borderColor:'#3b9eff',
+       borderWidth:2,pointRadius:0,tension:0.4,fill:false},
+    ]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{boxWidth:12,padding:14}},
+        annotation:{annotations},
+        tooltip:{backgroundColor:'#111823',borderColor:'#1c2a3a',borderWidth:1,
+          callbacks:{label:ctx=>{
+            if(ctx.datasetIndex===1) return `聚合GEX: ${ctx.raw.toFixed(4)}B`;
+            const s=strikes[ctx.dataIndex];
+            return [`净GEX: ${ctx.raw.toFixed(2)}M`,`CallOI:${(s?.callOI||0).toLocaleString()}`,`PutOI:${(s?.putOI||0).toLocaleString()}`];
+          }}}
+      },
+      scales:{
+        x:{type:'category',grid:{color:'#1c2a3a60'},
+           ticks:{maxRotation:45,autoSkip:true,maxTicksLimit:25,color:'#3a4f63'}},
+        y:{position:'left',grid:{color:'#1c2a3a60'},title:{display:true,text:'净 GEX (M)',color:'#3a4f63'}},
+        y2:{position:'right',grid:{display:false},title:{display:true,text:'聚合 GEX (B)',color:'#3b9eff50'},
+            ticks:{color:'#3b9eff80'}},
+      }
+    }
+  });
+}
+
+// 单元②：Vol/OI — 与单元①完全相同的labels数组
+function renderDoom2(data, strikes) {
+  if (S.doom.charts.d2) S.doom.charts.d2.destroy();
+  const canvas = document.getElementById('ch-d2');
+  const labels = strikes.map(s=>s.strike); // 与单元①完全相同
+
+  const maxRatio = Math.max(...strikes.map(s=>Math.max(s.callVolOI,s.putVolOI)),0.01);
+
+  const callBg = strikes.map(s=>{
+    const i=Math.min(s.callVolOI/maxRatio,1);
+    return `rgba(0,212,126,${0.15+i*0.8})`;
+  });
+  const putBg = strikes.map(s=>{
+    const i=Math.min(s.putVolOI/maxRatio,1);
+    return `rgba(240,62,82,${0.15+i*0.8})`;
+  });
+
+  const annotations={};
+  if(data.spotPrice){
+    annotations.spot={type:'line',xMin:data.spotPrice,xMax:data.spotPrice,
+      borderColor:'#00d47e60',borderWidth:1,borderDash:[3,3]};
+  }
+  if(data.callWall){
+    annotations.cw={type:'line',xMin:data.callWall,xMax:data.callWall,
+      borderColor:'#00d47e50',borderWidth:1,borderDash:[3,3]};
+  }
+  if(data.putWall){
+    annotations.pw={type:'line',xMin:data.putWall,xMax:data.putWall,
+      borderColor:'#f03e5250',borderWidth:1,borderDash:[3,3]};
+  }
+
+  S.doom.charts.d2 = new Chart(canvas,{
+    type:'bar',
+    data:{labels,datasets:[
+      {label:'Call Vol/OI',data:strikes.map(s=>s.callVolOI),backgroundColor:callBg,borderWidth:0},
+      {label:'Put Vol/OI', data:strikes.map(s=>-s.putVolOI), backgroundColor:putBg, borderWidth:0},
+    ]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{boxWidth:12,padding:14}},
+        annotation:{annotations},
+        tooltip:{backgroundColor:'#111823',borderColor:'#1c2a3a',borderWidth:1,
+          callbacks:{label:ctx=>{
+            const v=Math.abs(ctx.raw);
+            return `${ctx.dataset.label}: ${v.toFixed(3)}`;
+          }}}
+      },
+      scales:{
+        x:{type:'category',grid:{color:'#1c2a3a60'},
+           ticks:{maxRotation:45,autoSkip:true,maxTicksLimit:25,color:'#3a4f63'}},
+        y:{grid:{color:'#1c2a3a60'},title:{display:true,text:'Vol/OI',color:'#3a4f63'},
+           ticks:{callback:v=>Math.abs(v).toFixed(1),color:'#7a8fa5'}},
+      }
+    }
+  });
+}
+
+// 单元③：日内IV曲线
+function renderDoom3(history, data) {
+  if (S.doom.charts.d3) S.doom.charts.d3.destroy();
+  const canvas = document.getElementById('ch-d3');
+  if (!history || history.length < 2) { hideOverlay('ov-d3'); return; }
+
+  const labels = history.map(h=>{
+    const t=new Date(h.ts);
+    return t.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'});
+  });
+
+  const datasets=[];
+
+  // ATM IV 蓝线
+  if (history.some(h=>h.atmIV!=null)) {
+    datasets.push({
+      label:'ATM IV',
+      data:history.map(h=>h.atmIV),
+      borderColor:'#3b9eff',borderWidth:2,pointRadius:2,tension:0.3,fill:false,
+    });
+  }
+
+  // Call Wall IV 绿虚线
+  if (S.doom.selStrikes.has(`c:${data?.callWall}`) && history.some(h=>h.cwIV!=null)) {
+    datasets.push({
+      label:`CW ${data.callWall} IV`,
+      data:history.map(h=>h.cwIV),
+      borderColor:'#00d47e',borderWidth:2,pointRadius:2,tension:0.3,fill:false,borderDash:[5,3],
+    });
+  }
+
+  // Put Wall IV 红虚线
+  if (S.doom.selStrikes.has(`p:${data?.putWall}`) && history.some(h=>h.pwIV!=null)) {
+    datasets.push({
+      label:`PW ${data.putWall} IV`,
+      data:history.map(h=>h.pwIV),
+      borderColor:'#f03e52',borderWidth:2,pointRadius:2,tension:0.3,fill:false,borderDash:[5,3],
+    });
+  }
+
+  if(!datasets.length){hideOverlay('ov-d3');return;}
+
+  S.doom.charts.d3 = new Chart(canvas,{
+    type:'line',
+    data:{labels,datasets},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{boxWidth:12,padding:14}},
+        tooltip:{backgroundColor:'#111823',borderColor:'#1c2a3a',borderWidth:1,
+          callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.raw!=null?Number(ctx.raw).toFixed(2)+'%':'--'}`}}
+      },
+      scales:{
+        x:{grid:{color:'#1c2a3a60'},ticks:{color:'#3a4f63'}},
+        y:{grid:{color:'#1c2a3a60'},title:{display:true,text:'IV (%)',color:'#3a4f63'},
+           ticks:{callback:v=>v!=null?v.toFixed(1)+'%':null,color:'#7a8fa5'}},
+      }
+    }
+  });
+}
+
+// ═══ IV 标签 ══════════════════════════════════════════════════════════════════
+function renderIVTags(data) {
+  const c=document.getElementById('iv-tags');
+  c.innerHTML='';
+  const add=(key,label,type)=>{
+    const t=document.createElement('div');
+    const isSel=S.doom.selStrikes.has(key);
+    t.className=`iv-tag ${isSel?(type==='c'?'sc':'sp'):''}`;
+    t.textContent=label;
+    t.onclick=()=>{
+      if(S.doom.selStrikes.has(key)){S.doom.selStrikes.delete(key);t.className='iv-tag';}
+      else{S.doom.selStrikes.add(key);t.className=`iv-tag ${type==='c'?'sc':'sp'}`;}
+      if(S.doom.data) renderDoom3(S.doom.ivHistory,S.doom.data);
+    };
+    c.appendChild(t);
+  };
+  if(data.callWall) add(`c:${data.callWall}`,`📈 Call Wall ${data.callWall}`,'c');
+  if(data.putWall)  add(`p:${data.putWall}`, `📉 Put Wall ${data.putWall}`, 'p');
+  S.doom.customStrikes.forEach(s=>add(`c:${s}`,`★ ${s}`,'c'));
+}
+
+function addCustomIV() {
+  const v=parseFloat(document.getElementById('iv-custom').value);
+  if(isNaN(v)) return alert('请输入有效行权价');
+  S.doom.customStrikes.add(v);
+  S.doom.selStrikes.add(`c:${v}`);
+  if(S.doom.data){renderIVTags(S.doom.data);renderDoom3(S.doom.ivHistory,S.doom.data);}
+}
+
+// ═══ Gamma Squeeze 判断 ═══════════════════════════════════════════════════════
+/**
+ * 判断逻辑：
+ * 看涨挤压：
+ *   ① 现价距Call Wall ≤ 1%（接近压力位，做市商对冲压力大）
+ *   ② Call Wall的IV在最近3个记录点持续上升（市场预期该位置被突破）
+ *   ③ Call Wall的Call Vol/OI > 0.3（大量新仓位押注突破）
+ *   三条件均满足 → 做市商被迫大量买入标的对冲 → 可能引发正反馈加速上涨
+ *
+ * 看跌挤压：
+ *   ① 现价距Put Wall ≤ 1%
+ *   ② Put Wall的IV在最近3点持续上升
+ *   ③ Put Wall的Put Vol/OI > 0.3
+ *   三条件均满足 → 做市商被迫大量卖出标的对冲 → 可能引发加速下跌
+ */
+function updateSqueeze(data, history) {
+  const check=(wall, wallType, ivKey, voiKey, sigEl, detEl, dir)=>{
+    if(!wall||!data.spotPrice){sigEl.textContent='数据不足';return;}
+    const dist=Math.abs((wall-data.spotPrice)/data.spotPrice*100);
+    const c1=dist<=1;
+    const wStrike=data.strikes.find(s=>s.strike===wall);
+    const voi=wStrike?wStrike[voiKey]:0;
+    const c3=voi>0.3;
+    let c2=false;
+    if(history&&history.length>=3){
+      const last3=history.slice(-3).map(h=>h[ivKey]);
+      c2=last3[0]!=null&&last3[1]!=null&&last3[2]!=null&&last3[0]<last3[1]&&last3[1]<last3[2];
+    }
+    const score=[c1,c2,c3].filter(Boolean).length;
+    const msgs={3:'🔴 高风险 — 三条件满足，挤压随时可能爆发',2:'🟡 中等风险 — 两条件满足',1:'⚪ 低风险 — 仅一条件满足',0:'🟢 无信号'};
+    const colors={3:'var(--red)',2:'var(--yellow)',1:'var(--t2)',0:'var(--green)'};
+    sigEl.textContent=msgs[score];
+    sigEl.style.color=colors[score];
+    detEl.innerHTML=`①距${wallType} Wall(${wall}): ${dist.toFixed(2)}% ${c1?'✓':'✗'}<br>②IV持续上升(近3期): ${c2?'✓':'✗'}<br>③Vol/OI(${voi.toFixed(2)}>0.3): ${c3?'✓':'✗'}`;
+  };
+  check(data.callWall,'Call','cwIV','callVolOI',document.getElementById('sq-up'),document.getElementById('sq-up-d'),'up');
+  check(data.putWall, 'Put', 'pwIV','putVolOI', document.getElementById('sq-dn'),document.getElementById('sq-dn-d'),'dn');
+}
+
+// ═══ 自动刷新（市场时间内每15分钟） ═════════════════════════════════════════
+setInterval(async()=>{
+  const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+  const d=et.getDay(),m=et.getHours()*60+et.getMinutes();
+  if(!(d>=1&&d<=5&&m>=510&&m<960)) return;
+  for(const idx of [1,2]){
+    const sym=document.getElementById(`sym-${idx}`).value.trim().toUpperCase();
+    if(sym&&S.gex[idx].data) fetchRenderGEX(idx,sym).catch(console.error);
+  }
+  const dsym=document.getElementById('doom-sym').value.trim().toUpperCase();
+  if(dsym&&S.doom.data) loadDoom().catch(console.error);
+}, 15*60*1000);
+
+// ═══ 回车快捷键 ══════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded',()=>{
+  document.getElementById('sym-1').addEventListener('keydown',e=>{if(e.key==='Enter')loadGEX(1);});
+  document.getElementById('sym-2').addEventListener('keydown',e=>{if(e.key==='Enter')loadGEX(2);});
+  document.getElementById('doom-sym').addEventListener('keydown',e=>{if(e.key==='Enter')loadDoom();});
+});
 </script>
+</body>
+</html>
